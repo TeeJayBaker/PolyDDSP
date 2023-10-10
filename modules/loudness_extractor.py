@@ -3,6 +3,7 @@
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
+import torchaudio
 
 class LoudnessExtractor(nn.Module):
     """
@@ -27,7 +28,7 @@ class LoudnessExtractor(nn.Module):
 
         self.sr = sr
         self.frame_length = frame_length
-        self.n_fft = self.frame_length * 5
+        self.n_fft = self.frame_length # * 5
         self.device = device
         self.attenuate_gain = attenuate_gain
         self.smoothing_window = nn.Parameter(torch.hann_window(self.n_fft, dtype = torch.float32), requires_grad = False).to(self.device)
@@ -65,10 +66,30 @@ class LoudnessExtractor(nn.Module):
         Compute loudness envelopes for audio input
         """
 
-        padded_audio = F.pad(audio, (self.frame_length * 2, self.frame_length * 2))
-        sliced_audio = padded_audio.unfold(1, self.n_fft, self.frame_length)
-        sliced_windowed_audio = sliced_audio * self.smoothing_window
+        padded_audio = F.pad(audio, (self.frame_length // 2, self.frame_length // 2))
+        # sliced_audio = padded_audio.unfold(1, self.n_fft, self.frame_length)
+        # sliced_windowed_audio = sliced_audio * self.smoothing_window
+
 
         # compute FFT step
+        s = torch.stft(padded_audio, 
+                                n_fft=self.frame_length, 
+                                window=torch.hann_window(self.frame_length), 
+                                center=False, 
+                                return_complex=True)
+        
+        amplitude = torch.abs(s)
+        power = amplitude ** 2
 
-        return audio
+        frequencies = torch.fft.rfftfreq(self.n_fft, 1 / self.sr)
+        a_weighting = self.A_weighting(frequencies).unsqueeze(0).unsqueeze(0)
+
+        weighting = 10 ** (a_weighting/10)
+        # print(weighting)
+        # print(power)
+        power = power.transpose(-1,-2) * weighting
+
+        avg_power = torch.mean(power, -1)
+        loudness = torchaudio.functional.amplitude_to_DB(avg_power, multiplier=10, amin=1e-4, db_multiplier=10)
+
+        return loudness
