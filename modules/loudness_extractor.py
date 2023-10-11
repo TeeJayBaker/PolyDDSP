@@ -10,7 +10,7 @@ class LoudnessExtractor(nn.Module):
     Loudness envelope extractor
     
     Args:
-        sr: output audio sample rate
+        sr: input audio sample rate
         frame_length: length of each frame window
         attenuate_gain: gain multiplier applied at end of generation
         device: Specify whether computed on cpu, cuda or mps
