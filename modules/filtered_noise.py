@@ -257,6 +257,40 @@ class FilteredNoise(nn.Module):
             impulse_response = torch.fft.fftshift(impulse_response, dim = -1)
 
         return impulse_response
+    
+    def frequency_impulse_response(self, magnitudes, window_size = 0):
+        """Get windowed impulse responses using the frequency sampling method.
+
+        Follows the approach in:
+        https://ccrma.stanford.edu/~jos/sasp/Windowing_Desired_Impulse_Response.html
+
+        Args:
+            magnitudes: Frequency transfer curve. Float32 Tensor of shape [batch,
+            n_frames, n_frequencies] or [batch, n_frequencies]. The frequencies of the
+            last dimension are ordered as [0, f_nyqist / (n_frequencies -1), ...,
+            f_nyquist], where f_nyquist is (sample_rate / 2). Automatically splits the
+            audio into equally sized frames to match frames in magnitudes.
+            window_size: Size of the window to apply in the time domain. If window_size
+            is less than 1, it defaults to the impulse_response size.
+
+        Returns:
+            impulse_response: Time-domain FIR filter of shape
+            [batch, frames, window_size] or [batch, window_size].
+
+        Raises:
+            ValueError: If window size is larger than fft size.
+        """
+
+        # Get the IR (zero-phase form).
+        # magnitudes = torch.complex(magnitudes, torch.zeros_like(magnitudes))
+        impulse_response = torch.fft.irfft(magnitudes)
+
+        # Window and put in causal form.
+        impulse_response = self.apply_window_to_impulse_response(impulse_response,
+                                                            window_size)
+
+        return impulse_response
+
 
     def forward(self, z):
         """
