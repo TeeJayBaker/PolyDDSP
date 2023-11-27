@@ -205,6 +205,59 @@ class FilteredNoise(nn.Module):
         return self.crop_and_compensate_delay(audio_out, audio_size, ir_size,
                                               delay_compensation, padding)
 
+    def apply_window_to_impulse_response(self, impulse_response, window_size = 0, causal = False):
+        """
+        Apply window to impulse response and put it in causal form.
+
+        Args:
+            impulse_response: Impulse response frames to apply window to [batch, n_frames, ir_size].
+            window_size: Size of window to apply in time domain. If less than 1, defaults to impulse response size.
+            causal: impulse response is in causal form (central peak)
+
+        Returns:
+            impulse_response: Windowed impulse response in causal form, with last
+                dimension cropped to window_size if window_size is greater than 0 and less
+                than ir_size.
+        """
+        impulse_response = impulse_response.float()
+
+        # if IR is causal, convert to zero-phase
+        if causal:
+            impulse_response = torch.fft.fftshift(impulse_response, dim = -1)
+
+        # Get a window for better time/frequency resolution than rectangular.
+        # Window defaults to IR size, cannot be bigger.
+        ir_size = int(impulse_response.shape[-1])
+        if (window_size <= 0) or (window_size > ir_size):
+            window_size = ir_size
+        window = torch.hann_window(window_size)
+
+        # Zero pad the window and put in in zero-phase form.
+        padding = ir_size - window_size
+        if padding > 0:
+            half_idx = (window_size + 1) // 2
+            window = torch.cat((window[half_idx:], 
+                                torch.zeros(padding), 
+                                window[:half_idx]), dim = 0)
+        else:
+            window = torch.fft.fftshift(window, dim = -1)
+
+        # Apply the window, to get new IR (both in zero-phase form).
+        window = torch.broadcast_to(window, impulse_response.shape)
+        impulse_response = torch.mul(window, impulse_response.real)
+
+        # Put IR in causal form and trim zero padding.
+        if padding > 0:
+            first_half_start = (ir_size - (half_idx - 1)) + 1
+            second_half_end = half_idx + 1
+            impulse_response = torch.cat([impulse_response[..., first_half_start:], 
+                                          impulse_response[..., :second_half_end]],
+                                          axis=-1)
+        else:
+            impulse_response = torch.fft.fftshift(impulse_response, dim = -1)
+
+        return impulse_response
+
     def forward(self, z):
         """
         Compute LTI-FVR filter banks, and calculate time varying filtered noise via overlap-add.
