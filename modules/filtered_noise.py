@@ -290,7 +290,32 @@ class FilteredNoise(nn.Module):
                                                             window_size)
 
         return impulse_response
+        
+    def frequency_filter(self, audio, magnitudes, window_size = 0, padding = 'same'):
+        """Filter audio with a finite impulse response filter.
 
+        Args:
+            audio: Input audio. Tensor of shape [batch, audio_timesteps].
+            magnitudes: Frequency transfer curve. Float32 Tensor of shape [batch,
+                n_frames, n_frequencies] or [batch, n_frequencies]. The frequencies of the
+                last dimension are ordered as [0, f_nyqist / (n_frequencies -1), ...,
+                f_nyquist], where f_nyquist is (sample_rate / 2). Automatically splits the
+                audio into equally sized frames to match frames in magnitudes.
+            window_size: Size of the window to apply in the time domain. If window_size
+                is less than 1, it is set as the default (n_frequencies).
+            padding: Either 'valid' or 'same'. For 'same' the final output to be the
+                same size as the input audio (audio_timesteps). For 'valid' the audio is
+                extended to include the tail of the impulse response (audio_timesteps +
+                window_size - 1).
+
+        Returns:
+            Filtered audio. Tensor of shape
+                [batch, audio_timesteps + window_size - 1] ('valid' padding) or shape
+                [batch, audio_timesteps] ('same' padding).
+        """
+        impulse_response = self.frequency_impulse_response(magnitudes,
+                                                        window_size=window_size)
+        return self.fft_convolve(audio, impulse_response, padding=padding)
 
     def forward(self, z):
         """
