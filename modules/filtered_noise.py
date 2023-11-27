@@ -20,12 +20,34 @@ class FilteredNoise(nn.Module):
     Input: Filter coefficients of size (batch, frames, banks)
     Output: Filtered noise audio (batch, samples)
     """
-    def __init__(self, frame_length = 64, attenuate_gain = 1e-2, device = 'mps'):
+    def __init__(self, initial_bias = -5.0, window_size = 257, frame_length = 64, attenuate_gain = 1e-2, device = 'mps'):
         super(FilteredNoise, self).__init__()
         
+        self.initial_bias = initial_bias
+        self.window_size = window_size
         self.frame_length = frame_length
         self.device = device
         self.attenuate_gain = attenuate_gain
+
+    def exp_sigmoid(self, x, exponent = 10.0, max_value = 2.0, threshold = 1e-7):
+        """
+        Exponentiated Sigmoid pointwise nonlinearity.
+
+        Bounds input to [threshold, max_value] with slope given by exponent.
+
+        Args:
+            x: Input tensor.
+            exponent: In nonlinear regime (away from x=0), the output varies by this
+            factor for every change of x by 1.0.
+            max_value: Limiting value at x=inf.
+            threshold: Limiting value at x=-inf. Stablizes training when outputs are
+            pushed to 0.
+
+        Returns:
+            A tensor with pointwise nonlinearity applied.
+        """
+        x = x.float()
+        return max_value * torch.sigmoid(x) ** torch.log(exponent) + threshold
 
     def get_fft_size(self, frame_size, ir_size, power_of_two = True):
         """
@@ -323,6 +345,10 @@ class FilteredNoise(nn.Module):
         """
 
         batch_size, num_frames, num_banks = z['H'].shape
+        magnitudes = self.exp_sigmoid(z['H'] + self.initial_bias)
+
+        noise = torch.FloatTensor(batch_size, num_frames * self.frame_length).uniform_(-1, 1)
+        return self.frequency_filter(noise, magnitudes, window_size = self.window_size) * self.attenuate_gain
 
 import tensorflow as tf
 
