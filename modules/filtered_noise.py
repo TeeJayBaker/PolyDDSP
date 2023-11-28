@@ -15,12 +15,14 @@ class FilteredNoise(nn.Module):
     Args:
         frame_length: length of each frame window
         attenuate_gain: gain multiplier applied at end of generation
+        initial_bias: Initial bias for the sigmoid function
+        window_size: Size of the window to apply in the time domain for FIR filter
         device: Specify whether computed on cpu, cuda or mps
 
     Input: Filter coefficients of size (batch, frames, banks)
     Output: Filtered noise audio (batch, samples)
     """
-    def __init__(self, initial_bias = -5.0, window_size = 257, frame_length = 64, attenuate_gain = 1e-2, device = 'mps'):
+    def __init__(self, frame_length = 64, attenuate_gain = 1e-2, initial_bias = -5.0, window_size = 257, device = 'mps'):
         super(FilteredNoise, self).__init__()
         
         self.initial_bias = initial_bias
@@ -288,16 +290,16 @@ class FilteredNoise(nn.Module):
 
         Args:
             magnitudes: Frequency transfer curve. Float32 Tensor of shape [batch,
-            n_frames, n_frequencies] or [batch, n_frequencies]. The frequencies of the
-            last dimension are ordered as [0, f_nyqist / (n_frequencies -1), ...,
-            f_nyquist], where f_nyquist is (sample_rate / 2). Automatically splits the
-            audio into equally sized frames to match frames in magnitudes.
+                n_frames, n_frequencies] or [batch, n_frequencies]. The frequencies of the
+                last dimension are ordered as [0, f_nyqist / (n_frequencies -1), ...,
+                f_nyquist], where f_nyquist is (sample_rate / 2). Automatically splits the
+                audio into equally sized frames to match frames in magnitudes.
             window_size: Size of the window to apply in the time domain. If window_size
-            is less than 1, it defaults to the impulse_response size.
+                is less than 1, it defaults to the impulse_response size.
 
         Returns:
             impulse_response: Time-domain FIR filter of shape
-            [batch, frames, window_size] or [batch, window_size].
+                [batch, frames, window_size] or [batch, window_size].
 
         Raises:
             ValueError: If window size is larger than fft size.
