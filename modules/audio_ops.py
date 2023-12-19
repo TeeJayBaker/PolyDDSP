@@ -110,3 +110,23 @@ def overlap_and_add(self, frames, frame_step):
                                                     padding = 0).squeeze(1)
 
     return output_signal
+
+def pad_axis(x, padding=(0, 0), axis=0, **pad_kwargs):
+    """
+    Pads only one axis of a tensor.
+
+    Args:
+        x: Input tensor.
+        padding: Tuple of number of samples to pad (before, after).
+        axis: Which axis to pad.
+        **pad_kwargs: Other kwargs to pass to tf.pad.
+
+    Returns:
+        A tensor padded with padding along axis.
+    """
+    if axis >= len(x.shape):
+        raise ValueError('Axis {} is out of bounds for tensor of dimension {}.'
+                        .format(axis, len(x.shape)))
+    n_end_dims = len(x.shape) - axis - 1
+    paddings = (0,0) * n_end_dims + padding
+    return F.pad(x, paddings, **pad_kwargs)

@@ -72,4 +72,40 @@ class AdditiveSynth(nn.Module):
             The accumulated phase in range [0, 2*pi], shape [batch, time, ...].
         """
 
+        # Get tensor shapes.
+        n_batch = angular_frequency.shape[0]
+        n_time = angular_frequency.shape[1]
+        n_dims = len(angular_frequency.shape)
+        n_ch_dims = n_dims - 2
+
+        remainder = n_time % chunk_size
+        if remainder:
+            pad_amount = chunk_size - remainder
+            angular_frequency = ops.pad_axis(angular_frequency, (0, pad_amount), axis=1)
+
+        # Split input into chunks.
+        length = angular_frequency.shape[1]
+        n_chunks = int(length / chunk_size)
+        chunks = torch.reshape(angular_frequency,
+                            (n_batch, n_chunks, chunk_size) + (-1,) * n_ch_dims)
+        phase = torch.cumsum(chunks, dim=2)
+
+        # Add offsets.
+        # Offset of the next row is the last entry of the previous row.
+        offsets = phase[:, :, -1:, ...] % (2.0 * np.pi)
+        offsets = ops.pad_axis(offsets, (1, 0), axis=1)
+        offsets = offsets[:, :-1, ...]
+
+        # Offset is cumulative among the rows.
+        offsets = torch.cumsum(offsets, dim=1) % (2.0 * np.pi)
+        phase = phase + offsets
+
+        # Put back in original shape.
+        phase = phase % (2.0 * np.pi)
+        phase = torch.reshape(phase, (n_batch, length) + (-1,) * n_ch_dims)
+
+        # Remove padding if added it.
+        if remainder:
+            phase = phase[:, :n_time]
+
         return phase
