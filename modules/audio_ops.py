@@ -130,3 +130,8 @@ def pad_axis(x, padding=(0, 0), axis=0, **pad_kwargs):
     n_end_dims = len(x.shape) - axis - 1
     paddings = (0,0) * n_end_dims + padding
     return F.pad(x, paddings, **pad_kwargs)
+
+def safe_divide(numerator, denominator, eps=1e-7):
+        """Avoid dividing by zero by adding a small epsilon."""
+        safe_denominator = torch.where(denominator == 0.0, eps, denominator)
+        return numerator / safe_denominator

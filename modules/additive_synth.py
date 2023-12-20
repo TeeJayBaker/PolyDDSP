@@ -40,7 +40,7 @@ class AdditiveSynth(nn.Module):
         self.attenuate_gain = attenuate_gain
         self.device = device
 
-    def angular_cumsum(angular_frequency, chunk_size=1000):
+    def angular_cumsum(self, angular_frequency, chunk_size=1000):
         """
         Get phase by cumulative sumation of angular frequency.
 
@@ -109,3 +109,61 @@ class AdditiveSynth(nn.Module):
             phase = phase[:, :n_time]
 
         return phase
+    
+    def get_harmonic_frequencies(self, frequencies, n_harmonics):
+        """Create integer multiples of the fundamental frequency.
+
+        Args:
+            frequencies: Fundamental frequencies (Hz). Shape [batch_size, :, 1].
+            n_harmonics: Number of harmonics.
+
+        Returns:
+            harmonic_frequencies: Oscillator frequencies (Hz).
+            Shape [batch_size, :, n_harmonics].
+        """
+        frequencies = torch.FloatTensor(frequencies)
+
+        f_ratios = torch.linspace(1.0, float(n_harmonics), int(n_harmonics))
+        f_ratios = f_ratios[None, None, :]
+        harmonic_frequencies = frequencies * f_ratios
+        return harmonic_frequencies
+          
+    def remove_above_nyquist(self, frequency_envelopes,
+                             amplitude_envelopes,
+                             sample_rate = 16000):
+        """
+        Set amplitudes for oscillators above nyquist to 0.
+
+        Args:
+            frequency_envelopes: Sample-wise oscillator frequencies (Hz). Shape
+                [batch_size, n_samples, n_sinusoids].
+            amplitude_envelopes: Sample-wise oscillator amplitude. Shape [batch_size,
+                n_samples, n_sinusoids].
+            sample_rate: Sample rate in samples per a second.
+
+        Returns:
+            amplitude_envelopes: Sample-wise filtered oscillator amplitude.
+                Shape [batch_size, n_samples, n_sinusoids].
+        """
+        frequency_envelopes = torch.FloatTensor(frequency_envelopes)
+        amplitude_envelopes = torch.FloatTensor(amplitude_envelopes)
+
+        amplitude_envelopes = torch.where(
+            torch.gt(frequency_envelopes, sample_rate / 2.0),
+            torch.zeros_like(amplitude_envelopes), amplitude_envelopes)
+        return amplitude_envelopes
+    
+    def normalize_harmonics(self, harmonic_distribution, f0_hz=None, sample_rate=None):
+        """Normalize the harmonic distribution, optionally removing above nyquist."""
+        # Bandlimit the harmonic distribution.
+        if sample_rate is not None and f0_hz is not None:
+            n_harmonics = int(harmonic_distribution.shape[-1])
+            harmonic_frequencies = self.get_harmonic_frequencies(f0_hz, n_harmonics)
+            harmonic_distribution = self.remove_above_nyquist(
+                harmonic_frequencies, harmonic_distribution, sample_rate)
+
+        # Normalize
+        harmonic_distribution = ops.safe_divide(
+            harmonic_distribution,
+            torch.sum(harmonic_distribution, dim=-1, keepdim=True))
+        return harmonic_distribution
