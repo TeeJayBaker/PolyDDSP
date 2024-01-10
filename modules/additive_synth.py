@@ -8,7 +8,7 @@ import torch.nn.functional as F
 from scipy import fftpack
 import numpy as np
 import audio_ops as ops
-from typing import Text
+from typing import Text, Optional
 
 class AdditiveSynth(nn.Module):
     """
@@ -312,5 +312,67 @@ class AdditiveSynth(nn.Module):
             audio = torch.sum(audio, dim=-1)  # [mb, n_samples]
         return audio
 
-    def harmonic_synthesis():
-        raise NotImplementedError
+    def harmonic_synthesis(self, frequencies: torch.Tensor,
+                        amplitudes: torch.Tensor,
+                        harmonic_shifts: Optional[torch.Tensor] = None,
+                        harmonic_distribution: Optional[torch.Tensor] = None,
+                        n_samples: int = 64000,
+                        sample_rate: int = 16000,
+                        amp_resample_method: Text = 'window',
+                        use_angular_cumsum: bool = False) -> torch.Tensor:
+        """Generate audio from frame-wise monophonic harmonic oscillator bank.
+
+        Args:
+            frequencies: Frame-wise fundamental frequency in Hz. Shape [batch_size,
+            n_frames, 1].
+            amplitudes: Frame-wise oscillator peak amplitude. Shape [batch_size,
+            n_frames, 1].
+            harmonic_shifts: Harmonic frequency variations (Hz), zero-centered. Total
+            frequency of a harmonic is equal to (frequencies * harmonic_number * (1 +
+            harmonic_shifts)). Shape [batch_size, n_frames, n_harmonics].
+            harmonic_distribution: Harmonic amplitude variations, ranged zero to one.
+            Total amplitude of a harmonic is equal to (amplitudes *
+            harmonic_distribution). Shape [batch_size, n_frames, n_harmonics].
+            n_samples: Total length of output audio. Interpolates and crops to this.
+            sample_rate: Sample rate.
+            amp_resample_method: Mode with which to resample amplitude envelopes.
+            use_angular_cumsum: Use angular cumulative sum on accumulating phase
+            instead of tf.cumsum. More accurate for inference.
+
+        Returns:
+            audio: Output audio. Shape [batch_size, n_samples, 1]
+        """
+        frequencies = torch.FloatTensor(frequencies)
+        amplitudes = torch.FloatTensor(amplitudes)
+
+        if harmonic_distribution is not None:
+            harmonic_distribution = torch.FloatTensor(harmonic_distribution)
+            n_harmonics = int(harmonic_distribution.shape[-1])
+        elif harmonic_shifts is not None:
+            harmonic_shifts = torch.FloatTensor(harmonic_shifts)
+            n_harmonics = int(harmonic_shifts.shape[-1])
+        else:
+            n_harmonics = 1
+
+        # Create harmonic frequencies [batch_size, n_frames, n_harmonics].
+        harmonic_frequencies = self.get_harmonic_frequencies(frequencies, n_harmonics)
+        if harmonic_shifts is not None:
+            harmonic_frequencies *= (1.0 + harmonic_shifts)
+
+        # Create harmonic amplitudes [batch_size, n_frames, n_harmonics].
+        if harmonic_distribution is not None:
+            harmonic_amplitudes = amplitudes * harmonic_distribution
+        else:
+            harmonic_amplitudes = amplitudes
+
+        # Create sample-wise envelopes.
+        frequency_envelopes = self.resample(harmonic_frequencies, n_samples)  # cycles/sec
+        amplitude_envelopes = self.resample(harmonic_amplitudes, n_samples,
+                                        method=amp_resample_method)
+
+        # Synthesize from harmonics [batch_size, n_samples].
+        audio = self.oscillator_bank(frequency_envelopes,
+                                amplitude_envelopes,
+                                sample_rate=sample_rate,
+                                use_angular_cumsum=use_angular_cumsum)
+        return audio
