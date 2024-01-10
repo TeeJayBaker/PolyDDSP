@@ -169,7 +169,8 @@ class AdditiveSynth(nn.Module):
             torch.sum(harmonic_distribution, dim=-1, keepdim=True))
         return harmonic_distribution
     
-    def resample(inputs: torch.Tensor,
+    def resample(self,
+                 inputs: torch.Tensor,
                  n_timesteps: int,
                  method: Text = 'linear',
                  add_endpoint: bool = True) -> torch.Tensor:
@@ -259,21 +260,57 @@ class AdditiveSynth(nn.Module):
 
         return outputs
     
+    def oscillator_bank(self, frequency_envelopes: torch.Tensor,
+                        amplitude_envelopes: torch.Tensor,
+                        sample_rate: int = 16000,
+                        sum_sinusoids: bool = True,
+                        use_angular_cumsum: bool = False) -> torch.Tensor:
+        """Generates audio from sample-wise frequencies for a bank of oscillators.
+
+        Args:
+            frequency_envelopes: Sample-wise oscillator frequencies (Hz). Shape
+            [batch_size, n_samples, n_sinusoids].
+            amplitude_envelopes: Sample-wise oscillator amplitude. Shape [batch_size,
+            n_samples, n_sinusoids].
+            sample_rate: Sample rate in samples per a second.
+            sum_sinusoids: Add up audio from all the sinusoids.
+            use_angular_cumsum: If synthesized examples are longer than ~100k audio
+            samples, consider use_angular_cumsum to avoid accumulating noticible phase
+            errors due to the limited precision of tf.cumsum. Unlike the rest of the
+            library, this property can be set with global dependency injection with
+            gin. Set the gin parameter `oscillator_bank.use_angular_cumsum=True`
+            to activate. Avoids accumulation of errors for generation, but don't use
+            usually for training because it is slower on accelerators.
+
+        Returns:
+            wav: Sample-wise audio. Shape [batch_size, n_samples, n_sinusoids] if
+            sum_sinusoids=False, else shape is [batch_size, n_samples].
+        """
+        frequency_envelopes = torch.FloatTensor(frequency_envelopes)
+        amplitude_envelopes = torch.FloatTensor(amplitude_envelopes)
+
+        # Don't exceed Nyquist.
+        amplitude_envelopes = self.remove_above_nyquist(frequency_envelopes,
+                                                    amplitude_envelopes,
+                                                    sample_rate)
+
+        # Angular frequency, Hz -> radians per sample.
+        omegas = frequency_envelopes * (2.0 * np.pi)  # rad / sec
+        omegas = omegas / float(sample_rate)  # rad / sample
+
+        # Accumulate phase and synthesize.
+        if use_angular_cumsum:
+            # Avoids accumulation errors.
+            phases = self.angular_cumsum(omegas)
+        else:
+            phases = torch.cumsum(omegas, dim=1)
+
+        # Convert to waveforms.
+        wavs = torch.sin(phases)
+        audio = amplitude_envelopes * wavs  # [mb, n_samples, n_sinusoids]
+        if sum_sinusoids:
+            audio = torch.sum(audio, dim=-1)  # [mb, n_samples]
+        return audio
+
     def harmonic_synthesis():
         raise NotImplementedError
-    
-def test_resample():
-    # Create a random tensor of shape [1, 10, 2]
-    inputs = torch.rand((1, 2, 10))
-    n_timesteps = 20
-    add_endpoint = True
-    method = 'window'  # or 'nearest', 'cubic', 'window'
-
-    # Call the resample function
-    output = AdditiveSynth.resample(inputs, n_timesteps, method, add_endpoint)
-
-    # Print the shape of the output
-    print(output.shape)
-
-# Call the test function
-test_resample()
