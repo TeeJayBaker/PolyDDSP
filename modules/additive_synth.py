@@ -8,6 +8,7 @@ import torch.nn.functional as F
 from scipy import fftpack
 import numpy as np
 import audio_ops as ops
+from typing import Text
 
 class AdditiveSynth(nn.Module):
     """
@@ -167,3 +168,112 @@ class AdditiveSynth(nn.Module):
             harmonic_distribution,
             torch.sum(harmonic_distribution, dim=-1, keepdim=True))
         return harmonic_distribution
+    
+    def resample(inputs: torch.Tensor,
+                 n_timesteps: int,
+                 method: Text = 'linear',
+                 add_endpoint: bool = True) -> torch.Tensor:
+        """Interpolates a tensor from n_frames to n_timesteps.
+
+        Args:
+            inputs: Framewise 1-D, 2-D, 3-D, or 4-D Tensor. Shape [n_frames],
+            [batch_size, n_frames], [batch_size, channels, n_frames], or
+            [batch_size, channels, n_frames, n_freq].
+            n_timesteps: Time resolution of the output signal.
+            method: Type of resampling, must be in ['nearest', 'linear', 'cubic',
+            'window']. Linear and cubic ar typical bilinear, bicubic interpolation.
+            'window' uses overlapping windows (only for upsampling) which is smoother
+            for amplitude envelopes with large frame sizes.
+            add_endpoint: Hold the last timestep for an additional step as the endpoint.
+            Then, n_timesteps is divided evenly into n_frames segments. If false, use
+            the last timestep as the endpoint, producing (n_frames - 1) segments with
+            each having a length of n_timesteps / (n_frames - 1).
+        Returns:
+            Interpolated 1-D, 2-D, 3-D, or 4-D Tensor. Shape [n_timesteps],
+            [batch_size, n_timesteps], [batch_size, channels, n_timesteps], or
+            [batch_size, channels, n_timesteps, n_freqs].
+
+        Raises:
+            ValueError: If method is 'window' and input is 4-D.
+            ValueError: If method is not one of 'nearest', 'linear', 'cubic', or
+            'window'.
+        """
+
+        inputs = torch.FloatTensor(inputs)
+        is_1d = len(inputs.shape) == 1
+        is_2d = len(inputs.shape) == 2
+        is_4d = len(inputs.shape) == 4
+
+        # Ensure inputs are at least 3d. 
+        if is_1d:
+            inputs = inputs[None, None, :]
+        elif is_2d:
+            inputs = inputs[:, None, :]
+
+        # def _image_resize(method):
+        #     """Closure around tf.image.resize."""
+        #     # Image resize needs 4-D input. Add/remove extra axis if not 4-D.
+        #     outputs = inputs[:, :, None, :] if not is_4d else inputs
+        #     outputs = tf.compat.v1.image.resize(outputs,
+        #                                         [n_timesteps, outputs.shape[2]],
+        #                                         method=method,
+        #                                         align_corners=not add_endpoint)
+        #     return outputs[:, :, 0, :] if not is_4d else outputs
+
+        # # Perform resampling.
+        # if method == 'nearest':
+        #     outputs = _image_resize(tf.compat.v1.image.ResizeMethod.NEAREST_NEIGHBOR)
+        # elif method == 'linear':
+        #     outputs = _image_resize(tf.compat.v1.image.ResizeMethod.BILINEAR)
+        # elif method == 'cubic':
+        #     outputs = _image_resize(tf.compat.v1.image.ResizeMethod.BICUBIC)
+        # elif method == 'window':
+        #     outputs = upsample_with_windows(inputs, n_timesteps, add_endpoint)
+        # else:
+        #     raise ValueError('Method ({}) is invalid. Must be one of {}.'.format(
+        #         method, "['nearest', 'linear', 'cubic', 'window']"))
+        def resize(method):
+            """Closure around torch.nn.Upsample."""
+            # Image resize needs 4-D input. Add/remove extra axis if not 4-D.
+            outputs = inputs[:, :,  :, None] if not is_4d else inputs
+            outputs = nn.Upsample(size=[n_timesteps, outputs.shape[3]], mode=method, align_corners=not add_endpoint)(outputs)
+            return outputs[:, :, :, 0] if not is_4d else outputs
+
+        if method == 'nearest':
+            outputs = resize('nearest')
+        elif method == 'linear':
+            outputs = resize('bilinear')
+        elif method == 'cubic':
+            outputs = resize('bicubic')
+        elif method == 'window':
+            outputs = ops.upsample_with_windows(inputs, n_timesteps, add_endpoint)
+        else:
+            raise ValueError('Method ({}) is invalid. Must be one of {}.'.format(
+                method, "['nearest', 'linear', 'cubic', 'window']"))
+        
+        # Return outputs to the same dimensionality of the inputs.
+        if is_1d:
+            outputs = outputs[0, 0, :]
+        elif is_2d:
+            outputs = outputs[:, 0, :]
+
+        return outputs
+    
+    def harmonic_synthesis():
+        raise NotImplementedError
+    
+def test_resample():
+    # Create a random tensor of shape [1, 10, 2]
+    inputs = torch.rand((1, 2, 10))
+    n_timesteps = 20
+    add_endpoint = True
+    method = 'window'  # or 'nearest', 'cubic', 'window'
+
+    # Call the resample function
+    output = AdditiveSynth.resample(inputs, n_timesteps, method, add_endpoint)
+
+    # Print the shape of the output
+    print(output.shape)
+
+# Call the test function
+test_resample()

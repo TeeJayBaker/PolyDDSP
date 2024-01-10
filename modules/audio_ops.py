@@ -8,7 +8,7 @@ import torch.nn.functional as F
 from scipy import fftpack
 import numpy as np
 
-def exp_sigmoid(self, x, exponent = 10.0, max_value = 2.0, threshold = 1e-7):
+def exp_sigmoid(x, exponent = 10.0, max_value = 2.0, threshold = 1e-7):
     """
     Exponentiated Sigmoid pointwise nonlinearity.
 
@@ -28,7 +28,7 @@ def exp_sigmoid(self, x, exponent = 10.0, max_value = 2.0, threshold = 1e-7):
     x = x.float()
     return max_value * torch.sigmoid(x) ** torch.log(exponent) + threshold
 
-def get_fft_size(self, frame_size, ir_size, power_of_two = True):
+def get_fft_size(frame_size, ir_size, power_of_two = True):
     """
     Get FFT size for given frame and IR sizes
 
@@ -48,7 +48,7 @@ def get_fft_size(self, frame_size, ir_size, power_of_two = True):
         fft_size = int(fftpack.helper.next_fast_len(conv_frame_size))
     return fft_size
 
-def crop_and_compensate_delay(self, audio, audio_size, ir_size, delay_compensation, padding = 'same'):
+def crop_and_compensate_delay(audio, audio_size, ir_size, delay_compensation, padding = 'same'):
     """
     Crop audio to compensate for delay
 
@@ -90,7 +90,7 @@ def crop_and_compensate_delay(self, audio, audio_size, ir_size, delay_compensati
     end = crop - start
     return audio[:, start:-end]
 
-def overlap_and_add(self, frames, frame_step):
+def overlap_and_add(frames, frame_step):
     """
     Reconstructs a signal from a framed representation, recreation of tf.signal.overlap_and_add
     
@@ -101,7 +101,6 @@ def overlap_and_add(self, frames, frame_step):
     Returns:
         A 1D tensor of the reconstructed signal.
     """
-    print(frames.shape)
     # Dimensions
     overlap_add_filter = torch.eye(frames.shape[-1], requires_grad = False).unsqueeze(1)
     output_signal = nn.functional.conv_transpose1d(frames.transpose(1, 2), 
@@ -132,6 +131,75 @@ def pad_axis(x, padding=(0, 0), axis=0, **pad_kwargs):
     return F.pad(x, paddings, **pad_kwargs)
 
 def safe_divide(numerator, denominator, eps=1e-7):
-        """Avoid dividing by zero by adding a small epsilon."""
-        safe_denominator = torch.where(denominator == 0.0, eps, denominator)
-        return numerator / safe_denominator
+    """Avoid dividing by zero by adding a small epsilon."""
+    safe_denominator = torch.where(denominator == 0.0, eps, denominator)
+    return numerator / safe_denominator
+
+def upsample_with_windows(inputs: torch.Tensor,
+                          n_timesteps: int,
+                          add_endpoint: bool = True) -> torch.Tensor:
+    """Upsample a series of frames using using overlapping hann windows.
+
+    Good for amplitude envelopes.
+    Args:
+        inputs: Framewise 3-D tensor. Shape [batch_size, n_channels, n_frames].
+        n_timesteps: The time resolution of the output signal.
+        add_endpoint: Hold the last timestep for an additional step as the endpoint.
+        Then, n_timesteps is divided evenly into n_frames segments. If false, use
+        the last timestep as the endpoint, producing (n_frames - 1) segments with
+        each having a length of n_timesteps / (n_frames - 1).
+
+    Returns:
+        Upsampled 3-D tensor. Shape [batch_size, n_channels, n_timesteps].
+
+    Raises:
+        ValueError: If input does not have 3 dimensions.
+        ValueError: If attempting to use function for downsampling.
+        ValueError: If n_timesteps is not divisible by n_frames (if add_endpoint is
+        true) or n_frames - 1 (if add_endpoint is false).
+    """
+    inputs = torch.FloatTensor(inputs)
+
+    if len(inputs.shape) != 3:
+        raise ValueError('Upsample_with_windows() only supports 3 dimensions, '
+                        'not {}.'.format(inputs.shape))
+
+    # Mimic behavior of tf.image.resize.
+    # For forward (not endpointed), hold value for last interval.
+    if add_endpoint:
+        inputs = torch.cat((inputs, inputs[:, :, -1:]), dim=2)
+
+    n_frames = int(inputs.shape[2])
+    n_intervals = (n_frames - 1)
+
+    if n_frames >= n_timesteps:
+        raise ValueError('Upsample with windows cannot be used for downsampling'
+                        'More input frames ({}) than output timesteps ({})'.format(
+                            n_frames, n_timesteps))
+
+    if n_timesteps % n_intervals != 0.0:
+        minus_one = '' if add_endpoint else ' - 1'
+        raise ValueError(
+            'For upsampling, the target the number of timesteps must be divisible '
+            'by the number of input frames{}. (timesteps:{}, frames:{}, '
+            'add_endpoint={}).'.format(minus_one, n_timesteps, n_frames,
+                                    add_endpoint))
+
+    # Constant overlap-add, half overlapping windows.
+    hop_size = n_timesteps // n_intervals
+    window_length = 2 * hop_size
+    window = torch.hann_window(window_length)  # [window]
+
+    # Broadcast multiply.
+    # Add dimension for windows [batch_size, n_channels, n_frames, window].
+    x = inputs[:, :, :, None]
+    window = window[None, None, None, :]
+    x_windowed = (x * window)
+    # Collapse channel into batch size
+    x_windowed = torch.reshape(x_windowed, (-1, x_windowed.shape[2], x_windowed.shape[3]))
+    x = overlap_and_add(x_windowed, hop_size)
+    # Reshape back to original shape.
+    x = torch.reshape(x, (inputs.shape[0], inputs.shape[1], -1))
+
+    # Trim the rise and fall of the first and last window.
+    return x[:, :, hop_size:-hop_size]
