@@ -1,4 +1,6 @@
-"""Extractor function for loudness envelopes"""
+"""
+Extractor function for loudness envelopes
+"""
 
 import torch
 import torch.nn as nn
@@ -31,7 +33,8 @@ class LoudnessExtractor(nn.Module):
         self.n_fft = self.frame_length # * 5
         self.device = device
         self.attenuate_gain = attenuate_gain
-        self.smoothing_window = nn.Parameter(torch.hann_window(self.n_fft, dtype = torch.float32), requires_grad = False).to(self.device)
+        self.smoothing_window = nn.Parameter(torch.hann_window(self.n_fft, dtype = torch.float32), 
+                                             requires_grad = False).to(self.device)
 
     def A_weighting(self, frequencies, min_db=-45):
         """
@@ -46,7 +49,8 @@ class LoudnessExtractor(nn.Module):
         """
 
         f_sq = frequencies ** 2.0
-        const = torch.tensor([12194.217, 20.598997, 107.65265, 737.86223], dtype=torch.float32).to(self.device) ** 2.0
+        const = torch.tensor([12194.217, 20.598997, 107.65265, 737.86223], 
+                             dtype=torch.float32).to(self.device) ** 2.0
         weights = 2.0 + 20.0 * (
                 torch.log10(const[0])
                 + 2 * torch.log10(f_sq)
@@ -90,6 +94,9 @@ class LoudnessExtractor(nn.Module):
         power = power.transpose(-1,-2) * weighting
 
         avg_power = torch.mean(power, -1)
-        loudness = torchaudio.functional.amplitude_to_DB(avg_power, multiplier=10, amin=1e-4, db_multiplier=10)
+        loudness = torchaudio.functional.amplitude_to_DB(avg_power, 
+                                                         multiplier=10, 
+                                                         amin=1e-4, 
+                                                         db_multiplier=10)
 
         return loudness

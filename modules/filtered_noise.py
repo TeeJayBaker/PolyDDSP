@@ -5,7 +5,6 @@ Filtered noise synthesiser
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-from scipy import fftpack
 import numpy as np
 import audio_ops as ops
 
@@ -38,101 +37,6 @@ class FilteredNoise(nn.Module):
         self.device = device
         self.attenuate_gain = attenuate_gain
     
-    def fft_convolve(self, audio, impulse_response, padding = 'same', delay_compensation = -1):
-        """
-        Filter audio with frames of time-varying impulse responses.
-
-        Time-varying filter. Given audio [batch, n_samples], and a series of impulse
-        responses [batch, n_frames, n_impulse_response], splits the audio into frames,
-        applies filters, and then overlap-and-adds audio back together.
-        Applies non-windowed non-overlapping STFT/ISTFT to efficiently compute
-        convolution for large impulse response sizes.
-
-        Args:
-            audio: Input audio. Tensor of shape [batch, audio_timesteps].
-            impulse_response: Finite impulse response to convolve. Can either be a 2-D
-                Tensor of shape [batch, ir_size], or a 3-D Tensor of shape [batch,
-                ir_frames, ir_size]. A 2-D tensor will apply a single linear
-                time-invariant filter to the audio. A 3-D Tensor will apply a linear
-                time-varying filter. Automatically chops the audio into equally shaped
-                blocks to match ir_frames.
-            padding: Either 'valid' or 'same'. For 'same' the final output to be the
-                same size as the input audio (audio_timesteps). For 'valid' the audio is
-                extended to include the tail of the impulse response (audio_timesteps +
-                ir_timesteps - 1).
-            delay_compensation: Samples to crop from start of output audio to compensate
-                for group delay of the impulse response. If delay_compensation is less
-                than 0 it defaults to automatically calculating a constant group delay of
-                the windowed linear phase filter from frequency_impulse_response().
-
-        Returns:
-            audio_out: Convolved audio. Tensor of shape
-                [batch, audio_timesteps + ir_timesteps - 1] ('valid' padding) or shape
-                [batch, audio_timesteps] ('same' padding).
-
-        Raises:
-            ValueError: If audio and impulse response have different batch size.
-            ValueError: If audio cannot be split into evenly spaced frames. (i.e. the
-                number of impulse response frames is on the order of the audio size and
-                not a multiple of the audio size.)
-        """
-        audio, impulse_response = audio.float(), impulse_response.float()
-
-        # Get shapes of audio.
-        batch_size, audio_size = list(audio.size())
-
-        # Add a frame dimension to impulse response if it doesn't have one.
-        ir_shape = list(impulse_response.size())
-        if len(ir_shape) == 2:
-            impulse_response = impulse_response.unsqueeze(1)
-
-        # Broadcast impulse response.
-        if ir_shape[0] == 1 and batch_size > 1:
-            impulse_response = torch.tile(impulse_response, (batch_size, 1, 1))
-
-        # Get shapes of impulse response.
-        ir_shape = list(impulse_response.size())
-        batch_size_ir, n_ir_frames, ir_size = ir_shape
-
-        # Validate that batch sizes match.
-        if batch_size != batch_size_ir:
-            raise ValueError('Batch size of audio ({}) and impulse response ({}) must '
-                            'be the same.'.format(batch_size, batch_size_ir))
-
-        # Cut audio into frames.
-        frame_size = int(np.ceil(audio_size / n_ir_frames))
-        hop_size = frame_size
-
-        # Pad audio to match frame size (and match tf.signal.frame())
-        pad_size = frame_size - abs(audio_size % hop_size)
-        audio = F.pad(audio, (0, pad_size))
-        audio_frames = audio.unfold(-1, frame_size, hop_size)
-
-        # Check that number of frames match.
-        n_audio_frames = int(audio_frames.shape[1])
-        if n_audio_frames != n_ir_frames:
-            raise ValueError(
-                'Number of Audio frames ({}) and impulse response frames ({}) do not '
-                'match. For small hop size = ceil(audio_size / n_ir_frames), '
-                'number of impulse response frames must be a multiple of the audio '
-                'size.'.format(n_audio_frames, n_ir_frames))
-
-        # Pad and FFT the audio and impulse responses.
-        fft_size = ops.get_fft_size(frame_size, ir_size, power_of_2=True)
-        audio_fft = torch.fft.rfft(audio_frames, fft_size)
-        ir_fft = torch.fft.rfft(impulse_response, fft_size)
-
-        # Multiply the FFTs (same as convolution in time).
-        audio_ir_fft = torch.mul(audio_fft, ir_fft)
-
-        # Take the IFFT to resynthesize audio.
-        audio_frames_out = torch.fft.irfft(audio_ir_fft)
-        audio_out = ops.overlap_and_add(audio_frames_out, hop_size)
-
-        # Crop and shift the output audio.
-        return ops.crop_and_compensate_delay(audio_out, audio_size, ir_size,
-                                              delay_compensation, padding)
-
     def apply_window_to_impulse_response(self, impulse_response, window_size = 0, causal = False):
         """
         Apply window to impulse response and put it in causal form.
@@ -243,7 +147,7 @@ class FilteredNoise(nn.Module):
         """
         impulse_response = self.frequency_impulse_response(magnitudes,
                                                         window_size=window_size)
-        return self.fft_convolve(audio, impulse_response, padding=padding)
+        return ops.fft_convolve(audio, impulse_response, padding=padding)
 
     def forward(self, filter_coeff):
         """
@@ -255,8 +159,6 @@ class FilteredNoise(nn.Module):
 
         noise = torch.FloatTensor(batch_size, num_frames * self.frame_length).uniform_(-1, 1)
         return self.frequency_filter(noise, magnitudes, window_size = self.window_size) * self.attenuate_gain
-
-import tensorflow as tf
 
 
 
