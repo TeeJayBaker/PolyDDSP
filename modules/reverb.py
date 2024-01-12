@@ -4,6 +4,7 @@ Function for Finite Impulse Response (FIR) reverb
 
 import torch
 import torch.nn as nn
+import audio_ops as ops
 
 class Reverb(nn.Module):
     """
@@ -33,6 +34,7 @@ class Reverb(nn.Module):
         self.trainable = trainable
         self.reverb_length = reverb_length
         self.add_dry = add_dry
+        self.device = device
 
         if self.trainable:
             self.impulse_response = nn.Parameter(torch.zeros(self.reverb_length), 
@@ -60,14 +62,25 @@ class Reverb(nn.Module):
         """
         Match dimensions of audio and impulse response via batch size
         """
-        raise NotImplementedError
+        # Add batch if 1d
+        if len(impulse_response.shape) == 1:
+            impulse_response = impulse_response[None, :]
+        # tile to match batch dim
+        batch_size = int(audio.shape[0])
+        return torch.tile(impulse_response, [batch_size, 1])
             
     def forward(self, audio):
         """
         Apply impulse response to audio
         """
         audio = torch.FloatTensor(audio)
-        self.impulse_response = torch.FloatTensor(self.impulse_response)
-        self.impulse_response = self.impulse_response.to(self.device)
+        impulse_response = torch.FloatTensor(self.impulse_response)
 
-        raise NotImplementedError
+        if self.trainable:
+            impulse_response = self._match_dimensions(audio, impulse_response)
+        else:
+            if self.impulse_response is None:
+                raise ValueError('Must provide "ir" tensor if Reverb trainable=False.')
+
+        wet = ops.fft_convolve(audio, impulse_response, padding='same', delay_compensation=0)
+        return (wet + audio) if self.add_dry else wet

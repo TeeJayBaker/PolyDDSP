@@ -43,7 +43,7 @@ def get_fft_size(frame_size, ir_size, power_of_two = True):
     """
     conv_frame_size = frame_size + ir_size - 1
     if power_of_two:
-        fft_size = int(2**np.ciel(np.log2(conv_frame_size)))
+        fft_size = int(2**np.ceil(np.log2(conv_frame_size)))
     else:
         fft_size = int(fftpack.helper.next_fast_len(conv_frame_size))
     return fft_size
@@ -173,7 +173,8 @@ def fft_convolve(audio, impulse_response, padding = 'same', delay_compensation =
             number of impulse response frames is on the order of the audio size and
             not a multiple of the audio size.)
     """
-    audio, impulse_response = audio.float(), impulse_response.float()
+    audio = torch.FloatTensor(audio) 
+    impulse_response = torch.FloatTensor(impulse_response)
 
     # Get shapes of audio.
     batch_size, audio_size = list(audio.size())
@@ -188,7 +189,7 @@ def fft_convolve(audio, impulse_response, padding = 'same', delay_compensation =
         impulse_response = torch.tile(impulse_response, (batch_size, 1, 1))
 
     # Get shapes of impulse response.
-    ir_shape = list(impulse_response.size())
+    ir_shape = list(impulse_response.shape)
     batch_size_ir, n_ir_frames, ir_size = ir_shape
 
     # Validate that batch sizes match.
@@ -201,7 +202,7 @@ def fft_convolve(audio, impulse_response, padding = 'same', delay_compensation =
     hop_size = frame_size
 
     # Pad audio to match frame size (and match tf.signal.frame())
-    pad_size = frame_size - abs(audio_size % hop_size)
+    pad_size = frame_size - abs(audio_size % hop_size) if audio_size % frame_size != 0 else 0
     audio = F.pad(audio, (0, pad_size))
     audio_frames = audio.unfold(-1, frame_size, hop_size)
 
@@ -215,7 +216,7 @@ def fft_convolve(audio, impulse_response, padding = 'same', delay_compensation =
             'size.'.format(n_audio_frames, n_ir_frames))
 
     # Pad and FFT the audio and impulse responses.
-    fft_size = get_fft_size(frame_size, ir_size, power_of_2=True)
+    fft_size = get_fft_size(frame_size, ir_size, power_of_two=True)
     audio_fft = torch.fft.rfft(audio_frames, fft_size)
     ir_fft = torch.fft.rfft(impulse_response, fft_size)
 
