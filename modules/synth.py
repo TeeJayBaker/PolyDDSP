@@ -7,7 +7,7 @@ import torch.nn as nn
 import torch.nn.functional as F
 from scipy import fftpack
 import numpy as np
-import audio_ops as ops
+import modules.operations as ops
 from typing import Text, Optional
 
 class AdditiveSynth(nn.Module):

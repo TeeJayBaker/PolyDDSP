@@ -4,7 +4,7 @@ Function for Finite Impulse Response (FIR) reverb
 
 import torch
 import torch.nn as nn
-import audio_ops as ops
+import modules.operations as ops
 
 class Reverb(nn.Module):
     """

@@ -6,7 +6,7 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 import numpy as np
-import audio_ops as ops
+import modules.operations as ops
 
 class FilteredNoise(nn.Module):
     """
