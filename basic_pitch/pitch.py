@@ -9,6 +9,45 @@ import torchaudio
 import numpy as np
 import nnAudio.features.cqt as cqt
 
+class harmonic_stacking(nn.Module):
+    """
+    Harmonic stacking layer
+
+    Input: (batch, freq_bins, time_frames)
+
+    Args:
+        bins_per_semitone: The number of bins per semitone in the CQT
+        harmonics: The list of harmonics to stack
+        n_output_freqs: The number of output frequencies to return in each harmonic layer
+        
+    Returns: 
+        (batch, out_freq_bins, n_harmonics, time_frames)
+    """
+
+    def __init__(self, bins_per_semitone, harmonics, n_output_freqs):
+        super(harmonic_stacking, self).__init__()
+
+        self.bins_per_semitone = bins_per_semitone
+        self.harmonics = harmonics
+        self.n_output_freqs = n_output_freqs
+        self.shifts = [int(torch.round(12 * self.bins_per_semitone * np.log2(float(h)))) for h in self.harmonics]
+
+    def forward(self, x):
+        torch._assert(len(x.shape) == 3, "x must be (batch, freq_bins, time_frames)")
+        channels = []
+        for shift in self.shifts:
+            if shift == 0:
+                channels.append(x)
+            elif shift > 0:
+                channels.append(F.pad(x[:, shift:, :], (0, 0, 0, shift)))
+            elif shift < 0:
+                channels.append(F.pad(x[:, :shift, :], (0, 0, -shift, 0)))
+            else:
+                raise ValueError("shift must be non-zero")
+        x = torch.stack(channels, dim=2)
+        x = x[:, :, :self.n_output_freqs, :]
+        return x
+
 class basic_pitch(nn.Module):
     """
     Port of basic_pitch pitch prediction to pytorch
