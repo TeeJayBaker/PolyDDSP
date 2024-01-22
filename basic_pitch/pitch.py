@@ -55,28 +55,34 @@ class basic_pitch(nn.Module):
 
     def __init__(self,
                 sr=16000,
-                n_fft=2048,
                 hop_length=512,
-                n_mels=256,
                 max_semitones=72,
                 annotation_semitones=0,
-                fmin=0,
-                fmax=None,
                 annotation_base=55.0,
                 bins_per_semitone=1,
+                n_harmonics=8,
+                n_filters_contour=32,
+                n_filters_onsets=32,
+                n_filters_notes=32,
+                no_contours=False,
+                contour_bins_per_semitone=1,
+                n_freq_bins_contour=360,
                 device='mps'):
         super(basic_pitch, self).__init__()
 
         self.sr = sr
-        self.n_fft = n_fft
         self.hop_length = hop_length
-        self.n_mels = n_mels
         self.max_semitones = max_semitones
         self.annotation_semitones = annotation_semitones
-        self.fmin = fmin
-        self.fmax = fmax
         self.annotation_base = annotation_base
         self.bins_per_semitone = bins_per_semitone
+        self.n_harmonics = n_harmonics
+        self.n_filters_contour = n_filters_contour
+        self.n_filters_onsets = n_filters_onsets
+        self.n_filters_notes = n_filters_notes
+        self.no_contours = no_contours
+        self.contour_bins_per_semitone = contour_bins_per_semitone
+        self.n_freq_bins_contour = n_freq_bins_contour
         self.device = device
 
         
@@ -105,9 +111,7 @@ class basic_pitch(nn.Module):
 
     
 
-    def get_cqt(self, audio: torch.Tensor,
-                n_harmonics: int,
-                use_batchnorm: bool) -> torch.Tensor:
+    def get_cqt(self, audio: torch.Tensor, use_batchnorm: bool) -> torch.Tensor:
         """
         Compute CQT from audio
 
@@ -123,7 +127,7 @@ class basic_pitch(nn.Module):
         """
         n_semitones = np.min(
             [
-                int(np.ceil(12.0 * np.log2(n_harmonics)) + self.annotation_semitones),
+                int(np.ceil(12.0 * np.log2(self.n_harmonics)) + self.annotation_semitones),
                 self.max_semitones,
             ]
         )
@@ -143,7 +147,21 @@ class basic_pitch(nn.Module):
 
         return x
     
-    def forward():
+    def forward(self, x):
+        if self.num_harmonics > 1:
+            x = self.harmonic_stacking(self.contour_bins_per_semitone,
+                                       [0.5] + list(range(1, self.num_harmonics)),
+                                       self.n_freq_bins_contour)(x)
+        else:
+            x = self.harmonic_stacking(self.contour_bins_per_semitone,
+                                       [1],
+                                       self.n_freq_bins_contour)(x)
+            
+        # contour layers
+            
+        # notes layers
+            
+        # onsets layers
         raise NotImplementedError
         
 
