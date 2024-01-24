@@ -126,7 +126,7 @@ class basic_pitch(nn.Module):
             nn.Conv2d(self.n_harmonics, self.n_filters_contour, (5, 5), padding='same'),
             nn.BatchNorm2d(self.n_filters_contour),
             nn.ReLU(),
-            nn.Conv2d(self.n_filters_contour, 8, (3, 3 * 13), padding='same'),
+            nn.Conv2d(self.n_filters_contour, 8, (3 * 13, 3), padding='same'),
             nn.BatchNorm2d(8),
             nn.ReLU()
         )
@@ -137,14 +137,14 @@ class basic_pitch(nn.Module):
         )
 
         self.note_1 = nn.Sequential(
-            Conv2dSame(1, self.n_filters_notes, (7, 7), (1, 3)),
+            Conv2dSame(1, self.n_filters_notes, (7, 7), (3, 1)),
             nn.ReLU(),
-            nn.Conv2d(self.n_filters_notes, 1, (7, 3), padding='same'),
+            nn.Conv2d(self.n_filters_notes, 1, (3, 7), padding='same'),
             nn.Sigmoid()
         )
 
         self.onset_1 = nn.Sequential(
-            Conv2dSame(self.n_harmonics, self.n_filters_onsets, (5, 5), (1, 3)),
+            Conv2dSame(self.n_harmonics, self.n_filters_onsets, (5, 5), (3, 1)),
             nn.BatchNorm2d(self.n_filters_onsets),
             nn.ReLU()
         )
