@@ -9,6 +9,10 @@ import torch.nn.functional as F
 import numpy as np
 import nnAudio.features.cqt as nnAudio
 import math
+import utils
+from typing import Optional, Tuple
+
+MIDI_OFFSET = 21
 
 class harmonic_stacking(nn.Module):
     """
@@ -73,10 +77,83 @@ class Conv2dSame(torch.nn.Conv2d):
             self.dilation,
             self.groups,
         )
+    
+def constrain_frequency(onsets: torch.Tensor,
+                        frames: torch.Tensor, 
+                        max_freq: Optional[float], 
+                        min_freq: Optional[float]) -> Tuple[torch.Tensor, torch.Tensor]:
+    """
+    Constrain the frequency range of the pitch predictions by zeroing out bins outside the range
+
+    Args:
+        onsets: The onset predictions (batch, freq, time_frames)
+        frames: The frame predictions (batch, freq, time_frames)
+        max_freq: The maximum frequency to allow
+        min_freq: The minimum frequency to allow
+
+    Returns:
+        The constrained onset and frame predictions
+    """
+    # check inputs are batched
+    torch._assert(len(onsets.shape) == 3, "onsets must be (batch, freq, time_frames)")
+    torch._assert(len(frames.shape) == 3, "frames must be (batch, freq, time_frames)")
+    
+    if max_freq is not None:
+        max_freq_idx = int(np.round(utils.hz_to_midi(max_freq) - MIDI_OFFSET))
+        onsets[:, max_freq_idx:, :].zero_()
+        frames[:, max_freq_idx:, :].zero_()
+    if min_freq is not None:
+        min_freq_idx = int(np.round(utils.hz_to_midi(min_freq) - MIDI_OFFSET))
+        onsets[:, :min_freq_idx, :].zero_()
+        frames[:, :min_freq_idx, :].zero_()
+
+    return onsets, frames
+
+def get_infered_onsets(onsets: torch.Tensor,
+                       frames: torch.Tensor,
+                       n_diff: int = 2) -> torch.Tensor:
+    """
+    Infer onsets from large changes in frame amplutude
+
+    Args:
+        onsets: The onset predictions (batch, freq, time_frames)
+        frames: The frame predictions (batch, freq, time_frames)
+        n_diff: DDifferences used to detect onsets
+
+    Returns:
+        The maximum between the predicted onsets and its differences
+    """
+    # check inputs are batched
+    torch._assert(len(onsets.shape) == 3, "onsets must be (batch, freq, time_frames)")
+    torch._assert(len(frames.shape) == 3, "frames must be (batch, freq, time_frames)")
+
+    diffs = []
+    for n in range(1, n_diff + 1):
+        # Use PyTorch's efficient padding and slicing
+        frames_padded = torch.nn.functional.pad(frames, (0, 0, n, 0))
+        diffs.append(frames_padded[:, n:, :] - frames_padded[:, :-n, :])
+
+    frame_diff = torch.min(torch.stack(diffs), dim=0)[0]
+    frame_diff = torch.clamp(frame_diff, min=0)  # Replaces negative values with 0
+    frame_diff[:, :n_diff, :].zero_()  # Set the first n_diff frames to 0
+
+    # Rescale to have the same max as onsets
+    frame_diff = frame_diff * torch.max(onsets) / torch.max(frame_diff)
+
+    # Use the max of the predicted onsets and the differences
+    max_onsets_diff = torch.max(onsets, frame_diff)
+
+    return max_onsets_diff
+
 
 class basic_pitch(nn.Module):
     """
     Port of basic_pitch pitch prediction to pytorch
+
+    input: (batch, samples)
+    returns: {"onset": (batch, freq_bins, time_frames),
+              "contour": (batch, freq_bins, time_frames),
+              "note": (batch, freq_bins, time_frames)}
     """
 
     def __init__(self,
@@ -240,23 +317,3 @@ class basic_pitch(nn.Module):
 
         return {"onset": x_onset, "contour": x_contours, "note": x_notes}
     
-
-        
-
-def test_basic_pitch():
-    # Create a random tensor for audio
-    audio = torch.rand((1, 16000)).to('mps')  # 1 second of audio at 16000 Hz
-
-    # Instantiate a basic_pitch object
-    pitch_detector = basic_pitch(sr=16000, hop_length=512, n_harmonics=8, device='mps').to('mps')
-
-    # Call the forward method
-    output = pitch_detector(audio)
-
-    # Print the shape of the output
-    print(output['onset'].shape)
-    print(output['contour'].shape)
-    print(output['note'].shape)
-
-# Call the test function
-test_basic_pitch()
