@@ -7,7 +7,7 @@ import torch.nn as nn
 import torch.nn.functional as F
 
 import numpy as np
-import nnAudio.features.cqt as cqt
+import nnAudio.features.cqt as nnAudio
 import math
 
 class harmonic_stacking(nn.Module):
@@ -106,6 +106,54 @@ class basic_pitch(nn.Module):
         self.n_freq_bins_contour = annotation_semitones * contour_bins_per_semitone
         self.device = device
 
+        max_semitones = int(np.floor(12.0 * np.log2(0.5 * self.sr / self.annotation_base)))
+
+        n_semitones = np.min(
+            [
+                int(np.ceil(12.0 * np.log2(self.n_harmonics)) + self.annotation_semitones),
+                max_semitones,
+            ]
+        )
+
+        self.cqt = nnAudio.CQT2010v2(sr = self.sr,
+                          fmin = self.annotation_base,
+                          hop_length = self.hop_length,
+                          n_bins = n_semitones * self.contour_bins_per_semitone,
+                          bins_per_octave = 12 * self.contour_bins_per_semitone,
+                          verbose=False)
+        
+        self.contour_1 = nn.Sequential(
+            nn.Conv2d(self.n_harmonics, self.n_filters_contour, (5, 5), padding='same'),
+            nn.BatchNorm2d(self.n_filters_contour),
+            nn.ReLU(),
+            nn.Conv2d(self.n_filters_contour, 8, (3, 3 * 13), padding='same'),
+            nn.BatchNorm2d(8),
+            nn.ReLU()
+        )
+
+        self.contour_2 = nn.Sequential(
+            nn.Conv2d(8, 1, (5, 5), padding='same'),
+            nn.Sigmoid()
+        )
+
+        self.note_1 = nn.Sequential(
+            Conv2dSame(1, self.n_filters_notes, (7, 7), (1, 3)),
+            nn.ReLU(),
+            nn.Conv2d(self.n_filters_notes, 1, (7, 3), padding='same'),
+            nn.Sigmoid()
+        )
+
+        self.onset_1 = nn.Sequential(
+            Conv2dSame(self.n_harmonics, self.n_filters_onsets, (5, 5), (1, 3)),
+            nn.BatchNorm2d(self.n_filters_onsets),
+            nn.ReLU()
+        )
+
+        self.onset_2 = nn.Sequential(
+            nn.Conv2d(self.n_filters_onsets + 1, 1, (5, 5), padding='same'),
+            nn.Sigmoid()
+        )
+
         
     def normalised_to_db(self, audio: torch.Tensor) -> torch.Tensor:
         """
@@ -147,22 +195,8 @@ class basic_pitch(nn.Module):
             the log-normalised CQT of audio (batch, freq_bins, time_frames)
         """
 
-        max_semitones = int(np.floor(12.0 * np.log2(0.5 * self.sr / self.annotation_base)))
-
-        n_semitones = np.min(
-            [
-                int(np.ceil(12.0 * np.log2(self.n_harmonics)) + self.annotation_semitones),
-                max_semitones,
-            ]
-        )
-
         torch._assert(len(audio.shape) == 2, "audio has multiple channels, only mono is supported")
-        x = cqt.CQT2010v2(sr = self.sr,
-                          fmin = self.annotation_base,
-                          hop_length = self.hop_length,
-                          n_bins = n_semitones * self.contour_bins_per_semitone,
-                          bins_per_octave = 12 * self.contour_bins_per_semitone,
-                          verbose=False).to(self.device)(audio)
+        x = self.cqt(audio)
         x = self.normalised_to_db(x)
 
         if use_batchnorm:
@@ -179,45 +213,29 @@ class basic_pitch(nn.Module):
             x = harmonic_stacking(self.contour_bins_per_semitone,
                                   [0.5] + list(range(1, self.n_harmonics)),
                                   self.n_freq_bins_contour)(x)
-            input_size = self.n_harmonics
         else:
             x = harmonic_stacking(self.contour_bins_per_semitone,
                                   [1],
                                   self.n_freq_bins_contour)(x)
-            input_size = 1
         
-        # contour layers
-        x_contours = nn.Conv2d(input_size, self.n_filters_contour, (5, 5), padding='same')(x)
-        x_contours = nn.BatchNorm2d(self.n_filters_contour)(x_contours)
-        x_contours = nn.ReLU()(x_contours)
-
-        x_contours = nn.Conv2d(self.n_filters_contour, 8, (3, 3 * 13), padding='same')(x_contours)    
-        x_contours = nn.BatchNorm2d(8)(x_contours)
-        x_contours = nn.ReLU()(x_contours)
+        # contour layers         
+        x_contours = self.contour_1(x)
 
         if not self.no_contours:
-            x_contours = nn.Conv2d(8, 1, (5, 5), padding='same')(x_contours)
-            x_contours = nn.Sigmoid()(x_contours)
+            x_contours = self.contour_2(x_contours)
             x_contours = torch.squeeze(x_contours, 1)
             x_contours_reduced = torch.unsqueeze(x_contours, 1) 
         else:
             x_contours_reduced = x_contours
 
-        x_contours_reduced = Conv2dSame(1, self.n_filters_notes, (7, 7), (1, 3))(x_contours_reduced)
-        x_contours_reduced = nn.ReLU()(x_contours_reduced)
-
         # notes layers
-        x_notes_pre = nn.Conv2d(self.n_filters_notes, 1, (7, 3), padding='same')(x_contours_reduced)   
-        x_notes_pre = nn.Sigmoid()(x_notes_pre)
+        x_notes_pre = self.note_1(x_contours_reduced)
         x_notes = torch.squeeze(x_notes_pre, 1)
 
         # onsets layers
-        x_onset = Conv2dSame(input_size, self.n_filters_onsets, (5, 5), (1, 3))(x)
-        x_onset = nn.BatchNorm2d(self.n_filters_onsets)(x_onset)
-        x_onset = nn.ReLU()(x_onset)
-
+        x_onset = self.onset_1(x)
         x_onset = torch.cat([x_notes_pre, x_onset], dim=1)
-        x_onset = nn.Conv2d(self.n_filters_onsets + 1, 1, (5, 5), padding='same')(x_onset)
+        x_onset = self.onset_2(x_onset)
         x_onset = torch.squeeze(x_onset, 1)
 
         return {"onset": x_onset, "contour": x_contours, "note": x_notes}
