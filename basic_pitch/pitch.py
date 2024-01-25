@@ -10,7 +10,7 @@ import numpy as np
 import nnAudio.features.cqt as nnAudio
 import math
 import utils
-from typing import Optional, Tuple
+from typing import Optional, Tuple, List
 
 MIDI_OFFSET = 21
 
@@ -144,6 +144,28 @@ def get_infered_onsets(onsets: torch.Tensor,
     max_onsets_diff = torch.max(onsets, frame_diff)
 
     return max_onsets_diff
+
+def argrelmax(x: torch.Tensor, width: int = 3) -> torch.Tensor:
+    """
+    Emulate scipy.signal.argrelmax in torch
+
+    Args:
+        x: The input tensor
+        axis: The axis along which to find local maxima
+
+    Returns:
+        The indices of the local maxima
+    """
+    # check inputs are batched
+    torch._assert(len(x.shape) == 3, "x must be (batch, freq, time_frames)")
+    #print(x)
+    window_maxima = F.max_pool1d_with_indices(x, width, 1, padding = width//2)[1]
+    print(window_maxima)
+    candidates = window_maxima.unique()
+    print(candidates)
+    peaks = candidates[(window_maxima[candidates]==candidates).nonzero()]
+
+    return peaks
 
 
 class basic_pitch(nn.Module):
@@ -317,3 +339,56 @@ class basic_pitch(nn.Module):
 
         return {"onset": x_onset, "contour": x_contours, "note": x_notes}
     
+
+def output_to_notes_polyphonic(frames: torch.Tensor,
+                               onsets: torch.Tensor,
+                               onset_thresh: float,
+                               frame_thresh: float,
+                               min_note_len: int,
+                               infer_onsets: bool,
+                               max_freq: Optional[float],
+                               min_freq: Optional[float],
+                               melodia_trick: bool = True,
+                               energy_tol: int = 11) -> List[Tuple[int, int, int, float]]:
+    """
+    Convert pitch predictions to note predictions
+
+    Args:
+        frames: The frame predictions (freq_bins, time_frames)
+        onsets: The onset predictions (freq_bins, time_frames)
+        onset_thresh: The threshold for onset detection
+        frame_thresh: The threshold for frame detection
+        min_note_len: The minimum number of frames for a note to be valid
+        infer_onsets: If True, infer onsets from large changes in frame amplitude
+        max_freq: The maximum frequency to allow
+        min_freq: The minimum frequency to allow
+        melodia_trick: If True, use the Melodia trick to remove spurious notes
+        energy_tol: The energy tolerance for the Melodia trick
+
+    Returns:
+        A list of notes in the format (start_time, end_time, pitch, velocity)
+    """
+
+    n_frames = frames.shape[-1]
+
+    onsets, frames = constrain_frequency(onsets, frames, max_freq, min_freq)
+    # use onsets inferred from frames in addition to the predicted onsets
+    if infer_onsets:
+        onsets = get_infered_onsets(onsets, frames)
+    
+    peak_thresh_mat = torch.zeros_like(onsets)
+
+    raise NotImplementedError
+
+def test_argrelmax():
+    # Create a random numpy array
+    data = torch.rand(1,5,100)  # Shape: (100,)
+
+    # Call your argrelmax function
+    maxima = argrelmax(data)
+
+    # Print the indices of the relative maxima
+    print(maxima)
+
+# Call the test function
+test_argrelmax()
