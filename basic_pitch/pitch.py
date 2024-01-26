@@ -145,27 +145,28 @@ def get_infered_onsets(onsets: torch.Tensor,
 
     return max_onsets_diff
 
-def argrelmax(x: torch.Tensor, width: int = 3) -> torch.Tensor:
+def argrelmax(x: torch.Tensor) -> torch.Tensor:
     """
-    Emulate scipy.signal.argrelmax in torch
+    Emulate scipy.signal.argrelmax with axis 1 and order 1 in torch
 
     Args:
-        x: The input tensor
-        axis: The axis along which to find local maxima
+        x: The input tensor (batch, freq_bins, time_frames) 
 
     Returns:
         The indices of the local maxima
     """
-    # check inputs are batched
+    # Check inputs are batched
     torch._assert(len(x.shape) == 3, "x must be (batch, freq, time_frames)")
-    #print(x)
-    window_maxima = F.max_pool1d_with_indices(x, width, 1, padding = width//2)[1]
-    print(window_maxima)
-    candidates = window_maxima.unique()
-    print(candidates)
-    peaks = candidates[(window_maxima[candidates]==candidates).nonzero()]
 
-    return peaks
+    frames_padded = torch.nn.functional.pad(x, (1, 1))
+
+    diff1 = x - frames_padded[:, :, :-2]
+    diff2 = x - frames_padded[:, :, 2:]
+
+    diff1[:, :, :1].zero_()
+    diff1[:, :, -1:].zero_()
+
+    return torch.nonzero((diff1 > 0) * (diff2 > 0), as_tuple=True)
 
 
 class basic_pitch(nn.Module):
@@ -379,16 +380,3 @@ def output_to_notes_polyphonic(frames: torch.Tensor,
     peak_thresh_mat = torch.zeros_like(onsets)
 
     raise NotImplementedError
-
-def test_argrelmax():
-    # Create a random numpy array
-    data = torch.rand(1,5,100)  # Shape: (100,)
-
-    # Call your argrelmax function
-    maxima = argrelmax(data)
-
-    # Print the indices of the relative maxima
-    print(maxima)
-
-# Call the test function
-test_argrelmax()
