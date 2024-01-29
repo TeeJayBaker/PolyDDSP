@@ -13,6 +13,7 @@ import utils
 from typing import Optional, Tuple, List
 
 MIDI_OFFSET = 21
+MAX_FREQ_IDX = 87
 
 class harmonic_stacking(nn.Module):
     """
@@ -378,5 +379,58 @@ def output_to_notes_polyphonic(frames: torch.Tensor,
         onsets = get_infered_onsets(onsets, frames)
     
     peak_thresh_mat = torch.zeros_like(onsets)
+    peaks = argrelmax(onsets)
+    peak_thresh_mat[peaks] = onsets[peaks]
 
-    raise NotImplementedError
+    onset_idx = torch.nonzero(peak_thresh_mat >= onset_thresh)
+    onset_idx = onset_idx.flip([0])
+
+    remaining_energy = torch.clone(frames)
+
+    note_events = []
+    for batch_idx, freq_idx, note_start_idx in onset_idx:
+        # if we're too close to the end of the audio, continue
+        if note_start_idx >= n_frames - 1:
+            continue
+
+        # find time index at this frequency band where the frames drop below an energy threshold
+        i = note_start_idx + 1
+        k = 0  # number of frames since energy dropped below threshold
+        while i < n_frames - 1 and k < energy_tol:
+            if remaining_energy[batch_idx, freq_idx, i] < frame_thresh:
+                k += 1
+            else:
+                k = 0
+            i += 1
+
+        i -= k  # go back to frame above threshold
+
+         # if the note is too short, skip it
+        if i - note_start_idx <= min_note_len:
+            continue
+
+        remaining_energy[batch_idx, freq_idx, note_start_idx:i] = 0
+        if freq_idx < MAX_FREQ_IDX:
+            remaining_energy[batch_idx, freq_idx + 1, note_start_idx:i] = 0
+        if freq_idx > 0:
+            remaining_energy[batch_idx, freq_idx - 1, note_start_idx:i] = 0
+
+        # add the note
+        amplitude = torch.mean(frames[batch_idx, freq_idx, note_start_idx:i])
+        note_events.append(
+            (
+                note_start_idx,
+                i,
+                freq_idx + MIDI_OFFSET,
+                amplitude,
+            )
+        )
+
+    return note_events
+
+
+frames = torch.rand(1, 88, 100)
+onsets = torch.rand(1, 88, 100)
+
+output = output_to_notes_polyphonic(frames, onsets, 0.5, 0.5, 10, True, None, None)
+print(output)
