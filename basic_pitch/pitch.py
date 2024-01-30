@@ -387,6 +387,11 @@ def output_to_notes_polyphonic(frames: torch.Tensor,
 
     remaining_energy = torch.clone(frames)
 
+    onsets.detach().cpu().numpy()
+    frames.detach().cpu().numpy()
+    remaining_energy.detach().cpu().numpy()
+    onset_idx.detach().cpu().numpy()
+
     note_events = []
     for batch_idx, freq_idx, note_start_idx in onset_idx:
         # if we're too close to the end of the audio, continue
@@ -416,7 +421,7 @@ def output_to_notes_polyphonic(frames: torch.Tensor,
             remaining_energy[batch_idx, freq_idx - 1, note_start_idx:i] = 0
 
         # add the note
-        amplitude = torch.mean(frames[batch_idx, freq_idx, note_start_idx:i])
+        amplitude = np.mean(frames[batch_idx, freq_idx, note_start_idx:i])
         note_events.append(
             (
                 note_start_idx,
@@ -425,6 +430,69 @@ def output_to_notes_polyphonic(frames: torch.Tensor,
                 amplitude,
             )
         )
+    
+    if melodia_trick:
+        # remove spurious notes using the Melodia trick
+        energy_shape = remaining_energy.shape
+
+        while np.max(remaining_energy) > frame_thresh:
+            batch_idx, freq_idx, i_mid = np.unravel_index(np.argmax(remaining_energy), energy_shape)
+            remaining_energy[batch_idx, freq_idx, i_mid] = 0
+
+            # forward pass
+            i = i_mid + 1
+            k = 0
+            while i < n_frames - 1 and k < energy_tol:
+                if remaining_energy[batch_idx, freq_idx, i] < frame_thresh:
+                    k += 1
+                else:
+                    k = 0
+
+                remaining_energy[batch_idx, freq_idx, i] = 0
+                if freq_idx < MAX_FREQ_IDX:
+                    remaining_energy[batch_idx, freq_idx + 1, i] = 0
+                if freq_idx > 0:
+                    remaining_energy[batch_idx, freq_idx - 1, i] = 0
+
+                i += 1
+
+            i_end = i - 1 - k  # go back to frame above threshold
+
+            # backward pass
+            i = i_mid - 1
+            k = 0
+            while i > 0 and k < energy_tol:
+                if remaining_energy[batch_idx, freq_idx, i] < frame_thresh:
+                    k += 1
+                else:
+                    k = 0
+
+                remaining_energy[batch_idx, freq_idx, i] = 0
+                if freq_idx < MAX_FREQ_IDX:
+                    remaining_energy[batch_idx, freq_idx + 1, i] = 0
+                if freq_idx > 0:
+                    remaining_energy[batch_idx, freq_idx - 1, i] = 0
+
+                i -= 1
+
+            i_start = i + 1 + k  # go back to frame above threshold
+            assert i_start >= 0, "{}".format(i_start)
+            assert i_end < n_frames
+
+            if i_end - i_start <= min_note_len:
+                # note is too short, skip it
+                continue
+
+            # add the note
+            amplitude = np.mean(frames[batch_idx, freq_idx, i_start:i_end])
+            note_events.append(
+                (
+                    i_start,
+                    i_end,
+                    freq_idx + MIDI_OFFSET,
+                    amplitude,
+                )
+            )
 
     return note_events
 
