@@ -169,6 +169,21 @@ def argrelmax(x: torch.Tensor) -> torch.Tensor:
 
     return torch.nonzero((diff1 > 0) * (diff2 > 0), as_tuple=True)
 
+def midi_pitch_to_contour_bins(pitch_midi: int) -> np.array:
+    """Convert midi pitch to conrresponding index in contour matrix
+
+    Args:
+        pitch_midi: pitch in midi
+
+    Returns:
+        index in contour matrix
+
+    """
+    contour_bins_per_semitone = 3
+    annotation_base = 27.5
+    pitch_hz = utils.midi_to_hz(pitch_midi)
+    return 12.0 * contour_bins_per_semitone * np.log2(pitch_hz / annotation_base)
+
 
 class basic_pitch(nn.Module):
     """
@@ -485,7 +500,7 @@ def output_to_notes_polyphonic(frames: torch.Tensor,
 
             # add the note
             amplitude = np.mean(frames[batch_idx, freq_idx, i_start:i_end])
-            note_events.append(
+            note_events[batch_idx].append(
                 (
                     i_start,
                     i_end,
@@ -495,6 +510,56 @@ def output_to_notes_polyphonic(frames: torch.Tensor,
             )
 
     return note_events
+
+def get_pitch_bends(contours: torch.Tensor,
+                    note_events: List[Tuple[int, int, int, float]],
+                    n_bins_tolerance: int = 25) -> List[Tuple[int, int, int, float, Optional[List[int]]]]:
+    """
+    Given note events and contours, estimate pitch bends per note.
+    Pitch bends are represented as a sequence of evenly spaced midi pitch bend control units.
+    The time stamps of each pitch bend can be inferred by computing an evenly spaced grid between
+    the start and end times of each note event.
+
+    Args:
+        contours: Matrix of estimated pitch contours
+        note_events: note event tuple
+        n_bins_tolerance: Pitch bend estimation range. Defaults to 25.
+
+    Returns:
+        note events with pitch bends
+    """
+    contour_bins_per_semitone = 3
+    annotation_semitones = 88
+    n_freq_bins_contour = contour_bins_per_semitone * annotation_semitones
+
+    window_length = 2 * n_bins_tolerance + 1
+    freq_gaussian = torch.signal.windows.gaussian(window_length, std=5)
+    note_events_with_pitch_bends = []
+    for batch_idx in len(note_events):
+        for start_idx, end_idx, pitch_midi, amplitude in note_events[batch_idx]:
+            freq_idx = int(np.round(midi_pitch_to_contour_bins(pitch_midi)))
+            freq_start_idx = np.max([freq_idx - n_bins_tolerance, 0])
+            freq_end_idx = np.min([n_freq_bins_contour, freq_idx + n_bins_tolerance + 1])
+
+            pitch_bend_submatrix = (
+                contours[
+                    batch_idx, freq_start_idx:freq_end_idx, start_idx:end_idx
+                ] * freq_gaussian[
+                    np.max([0, n_bins_tolerance - freq_idx]) : window_length 
+                    - np.max([0, freq_idx - (n_freq_bins_contour - n_bins_tolerance - 1)])
+                ]
+            )
+            pb_shift = n_bins_tolerance - np.max([0, n_bins_tolerance - freq_idx])
+
+            pitch_bend_submatrix.detach().cpu().numpy()
+
+            bends: Optional[List[int]] = list(
+                np.argmax(pitch_bend_submatrix, axis=1) - pb_shift
+            )  # this is in units of 1/3 semitones
+            note_events_with_pitch_bends[batch_idx].append((start_idx, end_idx, pitch_midi, amplitude, bends))
+            
+    return note_events_with_pitch_bends
+
 
 
 frames = torch.rand(1, 88, 100)
