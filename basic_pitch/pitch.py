@@ -10,10 +10,15 @@ import numpy as np
 import nnAudio.features.cqt as nnAudio
 import math
 import utils
-from typing import Optional, Tuple, List
+import librosa
+from typing import Optional, Tuple, List, Dict
 
 MIDI_OFFSET = 21
 MAX_FREQ_IDX = 87
+AUDIO_SAMPLE_RATE = 22050
+FFT_HOP = 256
+ANNOT_N_FRAMES = 2 * 22050 // 256  
+AUDIO_N_SAMPLES = 2 * AUDIO_SAMPLE_RATE - FFT_HOP
 
 class harmonic_stacking(nn.Module):
     """
@@ -183,6 +188,19 @@ def midi_pitch_to_contour_bins(pitch_midi: int) -> np.array:
     annotation_base = 27.5
     pitch_hz = utils.midi_to_hz(pitch_midi)
     return 12.0 * contour_bins_per_semitone * np.log2(pitch_hz / annotation_base)
+
+def model_frames_to_time(n_frames: int) -> np.array:
+    original_times = original_times = librosa.core.frames_to_time(
+        np.arange(n_frames),
+        sr=AUDIO_SAMPLE_RATE,
+        hop_length=FFT_HOP,
+    )
+    window_numbers = np.floor(np.arange(n_frames) / ANNOT_N_FRAMES)
+    window_offset = (FFT_HOP / AUDIO_SAMPLE_RATE) * (
+        ANNOT_N_FRAMES - (AUDIO_N_SAMPLES / FFT_HOP)
+    ) + 0.0018  # this is a magic number, but it's needed for this to align properly
+    times = original_times - (window_offset * window_numbers)
+    return times
 
 
 class basic_pitch(nn.Module):
@@ -557,8 +575,70 @@ def get_pitch_bends(contours: torch.Tensor,
                 np.argmax(pitch_bend_submatrix, axis=1) - pb_shift
             )  # this is in units of 1/3 semitones
             note_events_with_pitch_bends[batch_idx].append((start_idx, end_idx, pitch_midi, amplitude, bends))
-            
+
     return note_events_with_pitch_bends
+
+
+def model_output_to_notes(output: Dict[str, torch.Tensor],
+                          onset_thresh: float,
+                          frame_thresh: float,
+                          infer_onsets: bool = True,
+                          min_note_len: int = 11,
+                          min_freq: Optional[float] = None,
+                          max_freq: Optional[float] = None,
+                          include_pitch_bends: bool = True,
+                          multple_pitch_bends: bool = False,
+                          melodia_trick: bool = True) -> List[Tuple[float, float, int, float, Optional[List[int]]]]:
+    """
+    Convert pitch predictions to note predictions
+
+    Args:
+        output: A dictionary with shape
+            {
+                'frame': array of shape (batch, n_freqs, n_times),
+                'onset': array of shape (batch, n_freqs, n_times),
+                'contour': array of shape (batch, 3 * n_freqs, n_times)
+            }
+            representing the output of the basic pitch model.
+        onset_thresh: Minimum amplitude of an onset activation to be considered an onset.
+        infer_onsets: If True, add additional onsets when there are large differences in frame amplitudes.
+        min_note_len: The minimum allowed note length in frames.
+        min_freq: Minimum allowed output frequency, in Hz. If None, all frequencies are used.
+        max_freq: Maximum allowed output frequency, in Hz. If None, all frequencies are used.
+        include_pitch_bends: If True, include pitch bends.
+        multiple_pitch_bends: If True, allow overlapping notes in midi file to have pitch bends.
+        melodia_trick: Use the melodia post-processing step.
+
+    Returns:
+        A list of notes in the format (start_time, end_time, pitch, velocity, pitch_bends)
+    """
+    frames = output["frame"]
+    onsets = output["onset"]
+    contours = output["contour"]
+
+    estimated_notes = output_to_notes_polyphonic(
+        frames, 
+        onsets, 
+        onset_thresh, 
+        frame_thresh, 
+        min_note_len, 
+        infer_onsets, 
+        max_freq, 
+        min_freq, 
+        melodia_trick
+    )
+    
+    if include_pitch_bends:
+        estimated_notes_with_pitch_bend = get_pitch_bends(contours, estimated_notes)
+    else:
+        estimated_notes_with_pitch_bend = [(note[0], note[1], note[2], note[3], None) for note in estimated_notes]
+
+    times_s = model_frames_to_time(contours.shape[-1])
+    estimated_notes_time_seconds = [
+        (times_s[note[0]], times_s[note[1]], note[2], note[3], note[4]) for note in estimated_notes_with_pitch_bend
+    ]
+
+    return estimated_notes_time_seconds
 
 
 
