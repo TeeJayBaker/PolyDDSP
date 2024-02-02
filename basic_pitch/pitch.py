@@ -11,6 +11,7 @@ import nnAudio.features.cqt as nnAudio
 import math
 import utils
 import librosa
+import pandas as pd
 from typing import Optional, Tuple, List, Dict
 
 MIDI_OFFSET = 21
@@ -588,6 +589,7 @@ def model_output_to_notes(output: Dict[str, torch.Tensor],
                           max_freq: Optional[float] = None,
                           include_pitch_bends: bool = True,
                           multple_pitch_bends: bool = False,
+                          return_frames: bool = True,
                           melodia_trick: bool = True) -> List[Tuple[float, float, int, float, Optional[List[int]]]]:
     """
     Convert pitch predictions to note predictions
@@ -633,6 +635,9 @@ def model_output_to_notes(output: Dict[str, torch.Tensor],
     else:
         estimated_notes_with_pitch_bend = [(note[0], note[1], note[2], note[3], None) for note in estimated_notes]
 
+    if return_frames:
+        return estimated_notes_with_pitch_bend
+    
     times_s = model_frames_to_time(contours.shape[-1])
     estimated_notes_time_seconds = [
         (times_s[note[0]], times_s[note[1]], note[2], note[3], note[4]) for note in estimated_notes_with_pitch_bend
@@ -640,6 +645,21 @@ def model_output_to_notes(output: Dict[str, torch.Tensor],
 
     return estimated_notes_time_seconds
 
+def convert_to_voices(notes: List[Tuple[float, float, int, float, Optional[List[int]]]], 
+                      n_voices: int) -> np.ndarray:
+    """
+    Convert notes to a matrix of voices
+
+    Args:
+        notes: A list of notes in the format (start_frame, end_frame, pitch, velocity, pitch_bends)
+    
+    Returns:
+        A matrix of voices in the format (time_frames, n_voices)
+    """
+
+    notes = pd.DataFrame(notes, columns=["start_frame", "end_frame", "pitch", "velocity", "pitch_bends"])
+    notes = notes.sort_values("start_frame")
+    notes = notes.reset_index(drop=True)
 
 
 frames = torch.rand(1, 88, 100)
