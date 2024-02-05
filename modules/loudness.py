@@ -21,10 +21,10 @@ class LoudnessExtractor(nn.Module):
     Output: Loudness envelopes of size (batch, frames)
     """
     def __init__(self,
-                sr = 16000,
-                frame_length = 64,
-                attenuate_gain = 2.,
-                device = 'mps'):
+                sr: int = 16000,
+                frame_length: int = 64,
+                attenuate_gain: float = 2.,
+                device: str = 'mps'):
     
         super(LoudnessExtractor, self).__init__()
 
@@ -36,7 +36,9 @@ class LoudnessExtractor(nn.Module):
         self.smoothing_window = nn.Parameter(torch.hann_window(self.n_fft, dtype = torch.float32), 
                                              requires_grad = False).to(self.device)
 
-    def A_weighting(self, frequencies, min_db=-45):
+    def A_weighting(self, 
+                    frequencies: torch.Tensor, 
+                    min_db: int = -45) -> torch.Tensor:
         """
         Calculate A-weighting in Decibel scale
         mirrors the librosa function of the same name
@@ -65,7 +67,7 @@ class LoudnessExtractor(nn.Module):
         else:
             return torch.maximum(torch.tensor([min_db], dtype = torch.float32).to(self.device), weights)
         
-    def forward(self, audio):
+    def forward(self, audio: torch.Tensor) -> torch.Tensor:
         """
         Compute loudness envelopes for audio input
         """

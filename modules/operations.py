@@ -8,7 +8,10 @@ import torch.nn.functional as F
 from scipy import fftpack
 import numpy as np
 
-def exp_sigmoid(x, exponent = 10.0, max_value = 2.0, threshold = 1e-7):
+def exp_sigmoid(x: torch.Tensor, 
+                exponent: float = 10.0, 
+                max_value: float = 2.0, 
+                threshold: float = 1e-7) -> torch.Tensor:
     """
     Exponentiated Sigmoid pointwise nonlinearity.
 
@@ -28,7 +31,9 @@ def exp_sigmoid(x, exponent = 10.0, max_value = 2.0, threshold = 1e-7):
     x = x.float()
     return max_value * torch.sigmoid(x) ** torch.log(exponent) + threshold
 
-def get_fft_size(frame_size, ir_size, power_of_two = True):
+def get_fft_size(frame_size: int, 
+                 ir_size: int, 
+                 power_of_two: bool = True) -> int:
     """
     Get FFT size for given frame and IR sizes
 
@@ -48,7 +53,11 @@ def get_fft_size(frame_size, ir_size, power_of_two = True):
         fft_size = int(fftpack.helper.next_fast_len(conv_frame_size))
     return fft_size
 
-def crop_and_compensate_delay(audio, audio_size, ir_size, delay_compensation, padding = 'same'):
+def crop_and_compensate_delay(audio: torch.Tensor, 
+                              audio_size: int, 
+                              ir_size: int, 
+                              delay_compensation: int, 
+                              padding: str = 'same') -> torch.Tensor:
     """
     Crop audio to compensate for delay
 
@@ -90,7 +99,8 @@ def crop_and_compensate_delay(audio, audio_size, ir_size, delay_compensation, pa
     end = crop - start
     return audio[:, start:-end]
 
-def overlap_and_add(frames, frame_step):
+def overlap_and_add(frames: torch.Tensor, 
+                    frame_step: int) -> torch.Tensor:
     """
     Reconstructs a signal from a framed representation, recreation of tf.signal.overlap_and_add
     
@@ -110,7 +120,9 @@ def overlap_and_add(frames, frame_step):
 
     return output_signal
 
-def pad_axis(x, padding=(0, 0), axis=0, **pad_kwargs):
+def pad_axis(x: torch.Tensor, 
+             padding: tuple[int] = (0, 0), 
+             axis: int = 0, **pad_kwargs) -> torch.Tensor:
     """
     Pads only one axis of a tensor.
 
@@ -130,12 +142,17 @@ def pad_axis(x, padding=(0, 0), axis=0, **pad_kwargs):
     paddings = (0,0) * n_end_dims + padding
     return F.pad(x, paddings, **pad_kwargs)
 
-def safe_divide(numerator, denominator, eps=1e-7):
+def safe_divide(numerator: torch.Tensor, 
+                denominator: torch.Tensor, 
+                eps: float = 1e-7) -> torch.Tensor:
     """Avoid dividing by zero by adding a small epsilon."""
     safe_denominator = torch.where(denominator == 0.0, eps, denominator)
     return numerator / safe_denominator
 
-def fft_convolve(audio, impulse_response, padding = 'same', delay_compensation = -1):
+def fft_convolve(audio: torch.Tensor, 
+                 impulse_response: torch.Tensor, 
+                 padding: str = 'same',
+                 delay_compensation: int = -1) -> torch.Tensor:
     """
     Filter audio with frames of time-varying impulse responses.
 

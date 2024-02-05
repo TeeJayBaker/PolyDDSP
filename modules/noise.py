@@ -23,11 +23,11 @@ class FilteredNoise(nn.Module):
     Output: Filtered noise audio (batch, samples)
     """
     def __init__(self, 
-                 frame_length = 64, 
-                 attenuate_gain = 1e-2, 
-                 initial_bias = -5.0, 
-                 window_size = 257, 
-                 device = 'mps'):
+                 frame_length: int = 64, 
+                 attenuate_gain: float = 1e-2, 
+                 initial_bias: float = -5.0, 
+                 window_size: int = 257, 
+                 device: str = 'mps'):
         
         super(FilteredNoise, self).__init__()
         
@@ -37,7 +37,10 @@ class FilteredNoise(nn.Module):
         self.device = device
         self.attenuate_gain = attenuate_gain
     
-    def apply_window_to_impulse_response(self, impulse_response, window_size = 0, causal = False):
+    def apply_window_to_impulse_response(self, 
+                                         impulse_response: torch.Tensor, 
+                                         window_size: int = 0, 
+                                         causal: bool = False) -> torch.Tensor:
         """
         Apply window to impulse response and put it in causal form.
 
@@ -90,7 +93,9 @@ class FilteredNoise(nn.Module):
 
         return impulse_response
     
-    def frequency_impulse_response(self, magnitudes, window_size = 0):
+    def frequency_impulse_response(self, 
+                                   magnitudes: torch.Tensor, 
+                                   window_size: int = 0) -> torch.Tensor:
         """Get windowed impulse responses using the frequency sampling method.
 
         Follows the approach in:
@@ -123,7 +128,11 @@ class FilteredNoise(nn.Module):
 
         return impulse_response
         
-    def frequency_filter(self, audio, magnitudes, window_size = 0, padding = 'same'):
+    def frequency_filter(self, 
+                         audio: torch.Tensor, 
+                         magnitudes: torch.Tensor, 
+                         window_size: int = 0, 
+                         padding: str = 'same') -> torch.Tensor:
         """Filter audio with a finite impulse response filter.
 
         Args:
@@ -149,7 +158,7 @@ class FilteredNoise(nn.Module):
                                                         window_size=window_size)
         return ops.fft_convolve(audio, impulse_response, padding=padding)
 
-    def forward(self, filter_coeff):
+    def forward(self, filter_coeff: torch.Tensor) -> torch.Tensor:
         """
         Compute LTI-FVR filter banks, and calculate time varying filtered noise via overlap-add.
         """

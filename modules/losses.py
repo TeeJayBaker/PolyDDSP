@@ -22,13 +22,13 @@ class SpectralLoss(nn.Module):
             (bearing in mind fft is not implemented on mps)
     """
     def __init__(self,
-                fft_sizes = [2048, 1024, 512, 256, 128, 64],
-                epsilon = 1e-7,
-                overlap = 0.75,
-                loss_type = 'L1',
-                mag_weight = 1.0,
-                logmag_weight = 1.0,
-                device = 'cpu'):
+                fft_sizes: list[int] = [2048, 1024, 512, 256, 128, 64],
+                epsilon: float = 1e-7,
+                overlap: float = 0.75,
+                loss_type: str = 'L1',
+                mag_weight: float = 1.0,
+                logmag_weight: float = 1.0,
+                device: str = 'cpu'):
         
         super(SpectralLoss, self).__init__()
 
@@ -49,7 +49,7 @@ class SpectralLoss(nn.Module):
             raise ValueError('loss_type must be one of "L1", "L2", or "cosine"')
         
     def spectogram(self, audio: torch.Tensor, 
-                   fft_size: list, 
+                   fft_size: list[int], 
                    power: int = 1):
         """
         Compute spectogram from audio
