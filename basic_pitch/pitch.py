@@ -12,7 +12,7 @@ import math
 import utils
 import librosa
 import pandas as pd
-from typing import Optional, Tuple, List, Dict
+from typing import Optional
 
 MIDI_OFFSET = 21
 MAX_FREQ_IDX = 87
@@ -36,7 +36,10 @@ class harmonic_stacking(nn.Module):
         (batch, n_harmonics, out_freq_bins, time_frames)
     """
 
-    def __init__(self, bins_per_semitone, harmonics, n_output_freqs):
+    def __init__(self, 
+                 bins_per_semitone: int, 
+                 harmonics: int, 
+                 n_output_freqs: int):
         super(harmonic_stacking, self).__init__()
 
         self.bins_per_semitone = bins_per_semitone
@@ -44,7 +47,7 @@ class harmonic_stacking(nn.Module):
         self.n_output_freqs = n_output_freqs
         self.shifts = [int(np.round(12 * self.bins_per_semitone * np.log2(float(h)))) for h in self.harmonics]
 
-    def forward(self, x):
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
         torch._assert(len(x.shape) == 3, "x must be (batch, freq_bins, time_frames)")
         channels = []
         for shift in self.shifts:
@@ -88,7 +91,7 @@ class Conv2dSame(torch.nn.Conv2d):
 def constrain_frequency(onsets: torch.Tensor,
                         frames: torch.Tensor, 
                         max_freq: Optional[float], 
-                        min_freq: Optional[float]) -> Tuple[torch.Tensor, torch.Tensor]:
+                        min_freq: Optional[float]) -> tuple[torch.Tensor, torch.Tensor]:
     """
     Constrain the frequency range of the pitch predictions by zeroing out bins outside the range
 
@@ -215,17 +218,17 @@ class basic_pitch(nn.Module):
     """
 
     def __init__(self,
-                sr=16000,
-                hop_length=256,
-                annotation_semitones=88,
-                annotation_base=27.5,
-                n_harmonics=8,
-                n_filters_contour=32,
-                n_filters_onsets=32,
-                n_filters_notes=32,
-                no_contours=False,
-                contour_bins_per_semitone=3,
-                device='mps'):
+                sr: int = 16000,
+                hop_length: int = 256,
+                annotation_semitones: int = 88,
+                annotation_base: float = 27.5,
+                n_harmonics: int = 8,
+                n_filters_contour: int = 32,
+                n_filters_onsets: int = 32,
+                n_filters_notes: int = 32,
+                no_contours: bool = False,
+                contour_bins_per_semitone: int = 3,
+                device: str = 'mps'):
         super(basic_pitch, self).__init__()
 
         self.sr = sr
@@ -385,7 +388,7 @@ def output_to_notes_polyphonic(frames: torch.Tensor,
                                max_freq: Optional[float],
                                min_freq: Optional[float],
                                melodia_trick: bool = True,
-                               energy_tol: int = 11) -> List[Tuple[int, int, int, float]]:
+                               energy_tol: int = 11) -> list[tuple[int, int, int, float]]:
     """
     Convert pitch predictions to note predictions
 
@@ -531,8 +534,8 @@ def output_to_notes_polyphonic(frames: torch.Tensor,
     return note_events
 
 def get_pitch_bends(contours: torch.Tensor,
-                    note_events: List[Tuple[int, int, int, float]],
-                    n_bins_tolerance: int = 25) -> List[Tuple[int, int, int, float, Optional[List[int]]]]:
+                    note_events: list[tuple[int, int, int, float]],
+                    n_bins_tolerance: int = 25) -> list[tuple[int, int, int, float, Optional[list[int]]]]:
     """
     Given note events and contours, estimate pitch bends per note.
     Pitch bends are represented as a sequence of evenly spaced midi pitch bend control units.
@@ -572,7 +575,7 @@ def get_pitch_bends(contours: torch.Tensor,
 
             pitch_bend_submatrix.detach().cpu().numpy()
 
-            bends: Optional[List[int]] = list(
+            bends: Optional[list[int]] = list(
                 np.argmax(pitch_bend_submatrix, axis=1) - pb_shift
             )  # this is in units of 1/3 semitones
             note_events_with_pitch_bends[batch_idx].append((start_idx, end_idx, pitch_midi, amplitude, bends))
@@ -580,7 +583,7 @@ def get_pitch_bends(contours: torch.Tensor,
     return note_events_with_pitch_bends
 
 
-def model_output_to_notes(output: Dict[str, torch.Tensor],
+def model_output_to_notes(output: dict[str, torch.Tensor],
                           onset_thresh: float,
                           frame_thresh: float,
                           infer_onsets: bool = True,
@@ -590,7 +593,7 @@ def model_output_to_notes(output: Dict[str, torch.Tensor],
                           include_pitch_bends: bool = True,
                           multple_pitch_bends: bool = False,
                           return_frames: bool = True,
-                          melodia_trick: bool = True) -> List[Tuple[float, float, int, float, Optional[List[int]]]]:
+                          melodia_trick: bool = True) -> list[tuple[float, float, int, float, Optional[list[int]]]]:
     """
     Convert pitch predictions to note predictions
 
@@ -645,7 +648,7 @@ def model_output_to_notes(output: Dict[str, torch.Tensor],
 
     return estimated_notes_time_seconds
 
-def convert_to_voices(notes: List[Tuple[float, float, int, float, Optional[List[int]]]], 
+def convert_to_voices(notes: list[tuple[float, float, int, float, Optional[list[int]]]], 
                       n_voices: int) -> np.ndarray:
     """
     Convert notes to a matrix of voices
