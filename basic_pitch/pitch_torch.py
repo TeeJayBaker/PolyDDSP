@@ -178,3 +178,226 @@ def argrelmax(x: torch.Tensor) -> torch.Tensor:
     diff1[:, :, -1:].zero_()
 
     return torch.nonzero((diff1 > 0) * (diff2 > 0), as_tuple=True)
+
+class basic_pitch(nn.Module):
+    """
+    Port of basic_pitch pitch prediction to pytorch
+
+    input: (batch, samples)
+    returns: {"onset": (batch, freq_bins, time_frames),
+              "contour": (batch, freq_bins, time_frames),
+              "note": (batch, freq_bins, time_frames)}
+    """
+
+    def __init__(self,
+                sr: int = 16000,
+                hop_length: int = 256,
+                annotation_semitones: int = 88,
+                annotation_base: float = 27.5,
+                n_harmonics: int = 8,
+                n_filters_contour: int = 32,
+                n_filters_onsets: int = 32,
+                n_filters_notes: int = 32,
+                no_contours: bool = False,
+                contour_bins_per_semitone: int = 3,
+                device: str = 'mps'):
+        super(basic_pitch, self).__init__()
+
+        self.sr = sr
+        self.hop_length = hop_length
+        self.annotation_semitones = annotation_semitones
+        self.annotation_base = annotation_base
+        self.n_harmonics = n_harmonics
+        self.n_filters_contour = n_filters_contour
+        self.n_filters_onsets = n_filters_onsets
+        self.n_filters_notes = n_filters_notes
+        self.no_contours = no_contours
+        self.contour_bins_per_semitone = contour_bins_per_semitone
+        self.n_freq_bins_contour = annotation_semitones * contour_bins_per_semitone
+        self.device = device
+
+        max_semitones = int(np.floor(12.0 * np.log2(0.5 * self.sr / self.annotation_base)))
+
+        n_semitones = np.min(
+            [
+                int(np.ceil(12.0 * np.log2(self.n_harmonics)) + self.annotation_semitones),
+                max_semitones,
+            ]
+        )
+
+        self.cqt = nnAudio.CQT2010v2(sr = self.sr,
+                          fmin = self.annotation_base,
+                          hop_length = self.hop_length,
+                          n_bins = n_semitones * self.contour_bins_per_semitone,
+                          bins_per_octave = 12 * self.contour_bins_per_semitone,
+                          verbose=False)
+        
+        self.contour_1 = nn.Sequential(
+            nn.Conv2d(self.n_harmonics, self.n_filters_contour, (5, 5), padding='same'),
+            nn.BatchNorm2d(self.n_filters_contour),
+            nn.ReLU(),
+            nn.Conv2d(self.n_filters_contour, 8, (3 * 13, 3), padding='same'),
+            nn.BatchNorm2d(8),
+            nn.ReLU()
+        )
+
+        self.contour_2 = nn.Sequential(
+            nn.Conv2d(8, 1, (5, 5), padding='same'),
+            nn.Sigmoid()
+        )
+
+        self.note_1 = nn.Sequential(
+            Conv2dSame(1, self.n_filters_notes, (7, 7), (3, 1)),
+            nn.ReLU(),
+            nn.Conv2d(self.n_filters_notes, 1, (3, 7), padding='same'),
+            nn.Sigmoid()
+        )
+
+        self.onset_1 = nn.Sequential(
+            Conv2dSame(self.n_harmonics, self.n_filters_onsets, (5, 5), (3, 1)),
+            nn.BatchNorm2d(self.n_filters_onsets),
+            nn.ReLU()
+        )
+
+        self.onset_2 = nn.Sequential(
+            nn.Conv2d(self.n_filters_onsets + 1, 1, (5, 5), padding='same'),
+            nn.Sigmoid()
+        )
+
+        
+    def normalised_to_db(self, audio: torch.Tensor) -> torch.Tensor:
+        """
+        Convert spectrogram to dB and normalise
+
+        Args:
+            audio: The spectrogram input. (batch, 1, freq_bins, time_frames) 
+                or (batch, freq_bins, time_frames)
+
+        Returns: 
+            the spectogram in dB in the same shape as the input
+        """
+        power = torch.square(audio)
+        log_power = 10.0 * torch.log10(power + 1e-10)
+
+        log_power_min = torch.min(log_power, keepdim=True, dim = -2)[0]
+        log_power_min = torch.min(log_power_min, keepdim=True, dim = -1)[0]
+        log_power_offset = log_power - log_power_min
+        log_power_offset_max = torch.max(log_power_offset, keepdim=True, dim=-2)[0]
+        log_power_offset_max = torch.max(log_power_offset_max, keepdim=True, dim=-1)[0]    
+
+        log_power_normalised = log_power_offset / log_power_offset_max
+        return log_power_normalised
+
+    
+
+    def get_cqt(self, audio: torch.Tensor, use_batchnorm: bool) -> torch.Tensor:
+        """
+        Compute CQT from audio
+
+        Args:
+            audio: The audio input. (batch, samples)
+            n_harmonics: The number of harmonics to capture above the maximum output frequency.
+                Used to calculate the number of semitones for the CQT.
+            use_batchnorm: If True, applies batch normalization after computing the CQT
+
+
+        Returns: 
+            the log-normalised CQT of audio (batch, freq_bins, time_frames)
+        """
+
+        torch._assert(len(audio.shape) == 2, "audio has multiple channels, only mono is supported")
+        x = self.cqt(audio)
+        x = self.normalised_to_db(x)
+
+        if use_batchnorm:
+            x = torch.unsqueeze(x, 1)
+            x = nn.BatchNorm2d(1).to(self.device)(x)
+            x = torch.squeeze(x, 1)
+
+        return x
+    
+    def forward(self, x: torch.Tensor) -> dict[str, torch.tensor]:
+        x = self.get_cqt(x, use_batchnorm=True)
+
+        if self.n_harmonics > 1:
+            x = harmonic_stacking(self.contour_bins_per_semitone,
+                                  [0.5] + list(range(1, self.n_harmonics)),
+                                  self.n_freq_bins_contour)(x)
+        else:
+            x = harmonic_stacking(self.contour_bins_per_semitone,
+                                  [1],
+                                  self.n_freq_bins_contour)(x)
+        
+        # contour layers         
+        x_contours = self.contour_1(x)
+
+        if not self.no_contours:
+            x_contours = self.contour_2(x_contours)
+            x_contours = torch.squeeze(x_contours, 1)
+            x_contours_reduced = torch.unsqueeze(x_contours, 1) 
+        else:
+            x_contours_reduced = x_contours
+
+        # notes layers
+        x_notes_pre = self.note_1(x_contours_reduced)
+        x_notes = torch.squeeze(x_notes_pre, 1)
+
+        # onsets layers
+        x_onset = self.onset_1(x)
+        x_onset = torch.cat([x_notes_pre, x_onset], dim=1)
+        x_onset = self.onset_2(x_onset)
+        x_onset = torch.squeeze(x_onset, 1)
+
+        return {"onset": x_onset, "contour": x_contours, "note": x_notes}
+    
+def output_to_notes_polyphonic(frames: torch.Tensor,
+                               onsets: torch.Tensor,
+                               onset_thresh: float,
+                               frame_thresh: float,
+                               min_note_len: int,
+                               infer_onsets: bool,
+                               max_freq: Optional[float],
+                               min_freq: Optional[float],
+                               melodia_trick: bool = True,
+                               n_voices: int = 10,
+                               energy_tol: int = 11) -> dict[str, torch.tensor]:
+    """
+    Convert pitch predictions to note predictions
+
+    Args:
+        frames: The frame predictions (freq_bins, time_frames)
+        onsets: The onset predictions (freq_bins, time_frames)
+        onset_thresh: The threshold for onset detection
+        frame_thresh: The threshold for frame detection
+        min_note_len: The minimum number of frames for a note to be valid
+        infer_onsets: If True, infer onsets from large changes in frame amplitude
+        max_freq: The maximum frequency to allow
+        min_freq: The minimum frequency to allow
+        melodia_trick: If True, use the Melodia trick to remove spurious notes
+        energy_tol: The energy tolerance for the Melodia trick
+
+    Returns:
+        a dict containing the notes tensor (n_voices, time_frames) and velocity tensor (n_voices, time_frames)
+    """
+
+    n_frames = frames.shape[-1]
+
+    onsets, frames = constrain_frequency(onsets, frames, max_freq, min_freq)
+    # use onsets inferred from frames in addition to the predicted onsets
+    if infer_onsets:
+        onsets = get_infered_onsets(onsets, frames)
+    
+    peak_thresh_mat = torch.zeros_like(onsets)
+    peaks = argrelmax(onsets)
+    peak_thresh_mat[peaks] = onsets[peaks]
+
+    onset_idx = torch.nonzero(peak_thresh_mat >= onset_thresh)
+    onset_idx = onset_idx.flip([0])
+
+    remaining_energy = torch.clone(frames)
+
+    notes = torch.zeros((n_voices, n_frames), dtype=torch.float32)
+    velocity = torch.zeros((n_voices, n_frames), dtype=torch.float32)
+
+    
+    raise NotImplementedError
