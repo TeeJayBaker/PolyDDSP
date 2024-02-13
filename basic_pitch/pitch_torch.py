@@ -397,7 +397,37 @@ def output_to_notes_polyphonic(frames: torch.Tensor,
     remaining_energy = torch.clone(frames)
 
     notes = torch.zeros((n_voices, n_frames), dtype=torch.float32)
-    velocity = torch.zeros((n_voices, n_frames), dtype=torch.float32)
+    amplitude = torch.zeros((n_voices, n_frames), dtype=torch.float32)
+
+    # from each onset_idx, search for strings of frames that are above the frame threshold in remaining_energy, allowing for gaps shorter than energy_tol
+    for batch_idx, freq_idx, note_start_idx in onset_idx:
+        # if we're too close to the end of the audio, continue
+        if note_start_idx >= n_frames - 1:
+            continue
+
+        # find time index at this frequency band where the frames drop below an energy threshold
+        i = note_start_idx + 1
+        k = 0  # number of frames since energy dropped below threshold
+        while i < n_frames - 1 and k < energy_tol:
+            if remaining_energy[batch_idx, freq_idx, i] < frame_thresh:
+                k += 1
+            else:
+                k = 0
+            i += 1
+
+        i -= k  # go back to frame above threshold
+
+         # if the note is too short, skip it
+        if i - note_start_idx <= min_note_len:
+            continue
+
+        remaining_energy[batch_idx, freq_idx, note_start_idx:i] = 0
+        if freq_idx < MAX_FREQ_IDX:
+            remaining_energy[batch_idx, freq_idx + 1, note_start_idx:i] = 0
+        if freq_idx > 0:
+            remaining_energy[batch_idx, freq_idx - 1, note_start_idx:i] = 0
+
+        # need to assign notes to voices.
 
     
     raise NotImplementedError
