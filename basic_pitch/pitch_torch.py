@@ -381,6 +381,7 @@ def output_to_notes_polyphonic(frames: torch.Tensor,
     """
 
     n_frames = frames.shape[-1]
+    n_batch = frames.shape[0]
 
     onsets, frames = constrain_frequency(onsets, frames, max_freq, min_freq)
     # use onsets inferred from frames in addition to the predicted onsets
@@ -391,13 +392,18 @@ def output_to_notes_polyphonic(frames: torch.Tensor,
     peaks = argrelmax(onsets)
     peak_thresh_mat[peaks] = onsets[peaks]
 
-    onset_idx = torch.nonzero(peak_thresh_mat >= onset_thresh)
-    onset_idx = onset_idx.flip([0])
+
+    # permute to make time dimension 1, to ensure time is sorted before frequency
+    onset_idx = torch.nonzero(peak_thresh_mat.permute([0,2,1]) >= onset_thresh)
+    # return columns to original order
+    onset_idx = torch.cat([onset_idx[:, 0:1], onset_idx[:, 2:3], onset_idx[:, 1:2]], dim=1)
+    # sort backwards in time?
+    #onset_idx = onset_idx.flip([0])
 
     remaining_energy = torch.clone(frames)
 
-    notes = torch.zeros((n_voices, n_frames), dtype=torch.float32)
-    amplitude = torch.zeros((n_voices, n_frames), dtype=torch.float32)
+    notes = torch.zeros((n_batch, n_voices, n_frames), dtype=torch.float32)
+    amplitude = torch.zeros((n_batch, n_voices, n_frames), dtype=torch.float32)
 
     # from each onset_idx, search for strings of frames that are above the frame threshold in remaining_energy, allowing for gaps shorter than energy_tol
     for batch_idx, freq_idx, note_start_idx in onset_idx:
@@ -427,7 +433,26 @@ def output_to_notes_polyphonic(frames: torch.Tensor,
         if freq_idx > 0:
             remaining_energy[batch_idx, freq_idx - 1, note_start_idx:i] = 0
 
-        # need to assign notes to voices.
+        # need to assign notes to voices, first in first out.
+        # keep track of voice allocation order
+        v = list(range(n_voices))
+        for i in range(n_voices):
+            if notes[batch_idx, i, note_start_idx] == 0:
+                v.insert(1, v.pop(i))
+                notes[batch_idx, v[i], note_start_idx:i] = utils.midi_to_hz(freq_idx + MIDI_OFFSET)
+                amplitude[batch_idx, v[i], note_start_idx:i] = frames[batch_idx, freq_idx, note_start_idx:i]
+                break
+            #if no free voice set the lowest amplitude voice to the new note
+            if i == n_voices - 1:
+                min_idx = torch.argmin(amplitude[batch_idx, :, note_start_idx:i])
+                notes[batch_idx, min_idx, note_start_idx:i] = utils.midi_to_hz(freq_idx + MIDI_OFFSET)
+                amplitude[batch_idx, min_idx, note_start_idx:i] = frames[batch_idx, freq_idx, note_start_idx:i]
+        
 
-    
-    raise NotImplementedError
+    return {"notes": notes, "velocity": amplitude}
+
+frames = torch.rand(1, 88, 100)
+onsets = torch.rand(1, 88, 100)
+
+output = output_to_notes_polyphonic(frames, onsets, 0.5, 0.5, 10, True, None, None)
+print(output)
