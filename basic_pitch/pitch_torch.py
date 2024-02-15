@@ -350,6 +350,21 @@ class basic_pitch(nn.Module):
 
         return {"onset": x_onset, "contour": x_contours, "note": x_notes}
     
+def get_pitch_bends(contour: torch.Tensor,
+                    note_event: list(int)) -> torch.Tensor:
+    """
+    Get the pitch bends from the contour and note event predictions
+
+    Args:
+        contour: The contour predictions (batch, freq_bins, time_frames)
+        note_event: The note event predictions list(batch, freq, start_idx, end_idx)
+
+    Returns:
+        The pitch bend predictions (time_frames)
+    """
+    
+    raise NotImplementedError
+
 def output_to_notes_polyphonic(frames: torch.Tensor,
                                onsets: torch.Tensor,
                                onset_thresh: float,
