@@ -387,14 +387,16 @@ def get_pitch_bends(contours: torch.Tensor,
     window_length = 2 * n_bins_tolerance + 1
     freq_gaussian = torch.signal.windows.gaussian(window_length, std=5)
 
-    batch_idx, start_idx, end_idx = note_event[0], note_event[2], note_event[3]
-    freq_idx = midi_pitch_to_contour_bins(note_event[1])
+    batch_idx, freq, start_idx, end_idx = note_event
+    freq_idx = midi_pitch_to_contour_bins(freq)
     freq_start_idx = max(0, freq_idx - n_bins_tolerance)
     freq_end_idx = min(n_freq_bins_contour, freq_idx + n_bins_tolerance + 1)
 
+    contours_trans = contours.permute(0, 2, 1)
+
     pitch_bend_submatrix = (
-        contours[
-            batch_idx, freq_start_idx:freq_end_idx, start_idx:end_idx
+        contours_trans[
+            batch_idx, start_idx:end_idx, freq_start_idx:freq_end_idx
         ] * freq_gaussian[
             max([0, n_bins_tolerance - freq_idx]) : window_length 
             - max([0, freq_idx - (n_freq_bins_contour - n_bins_tolerance - 1)])
@@ -402,13 +404,9 @@ def get_pitch_bends(contours: torch.Tensor,
     )
 
     pb_shift = n_bins_tolerance - max([0, n_bins_tolerance - freq_idx])
-    bends = list(
-                torch.argmax(pitch_bend_submatrix, axis=1) - pb_shift
-            ) 
-    
-
-
-    raise NotImplementedError
+    bends = (torch.argmax(pitch_bend_submatrix, axis=1) - pb_shift) * 0.25 + freq
+            
+    return bends
 
 def output_to_notes_polyphonic(frames: torch.Tensor,
                                onsets: torch.Tensor,
