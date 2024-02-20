@@ -492,25 +492,87 @@ def output_to_notes_polyphonic(frames: torch.Tensor,
             remaining_energy[batch_idx, freq_idx - 1, note_start_idx:i] = 0
 
         bends = get_pitch_bends(contours, [batch_idx, freq_idx, note_start_idx, i], 25)
-        print(bends)
 
         # need to assign notes to voices, first in first out.
         # keep track of voice allocation order
         v = list(range(n_voices))
         for j in range(n_voices):
             if notes[batch_idx, v[j], note_start_idx] == 0:
-                notes[batch_idx, v[j], note_start_idx:i] = utils.midi_to_hz(freq_idx + MIDI_OFFSET)
+                notes[batch_idx, v[j], note_start_idx:i] = utils.tensor_midi_to_hz(bends + MIDI_OFFSET)
                 amplitude[batch_idx, v[j], note_start_idx:i] = frames[batch_idx, freq_idx, note_start_idx:i]
                 v.insert(0, v.pop(j))
                 break
             #if no free voice set the lowest amplitude voice to the new note
             if j == n_voices - 1:
                 min_idx = torch.argmin(torch.mean(amplitude[batch_idx, :, note_start_idx:i], dim=1))
-                notes[batch_idx, min_idx, note_start_idx:i] = utils.midi_to_hz(freq_idx + MIDI_OFFSET)
+                notes[batch_idx, min_idx, note_start_idx:i] = utils.tensor_midi_to_hz(bends + MIDI_OFFSET)
                 amplitude[batch_idx, min_idx, note_start_idx:i] = frames[batch_idx, freq_idx, note_start_idx:i]
                 v.insert(0, v.pop(v.index(min_idx)))
 
-        
+    if melodia_trick:
+        energy_shape = remaining_energy.shape
+
+        while torch.max(remaining_energy) > frame_thresh:
+            batch, freq_idx, i_mid = torch.unravel_index(torch.argmax(remaining_energy), energy_shape)
+            remaining_energy[batch, freq_idx, i_mid] = 0
+
+            # forward pass
+            i = i_mid + 1
+            k = 0
+            while i < n_frames - 1 and k < energy_tol:
+                if remaining_energy[batch, freq_idx, i] < frame_thresh:
+                    k += 1
+                else:
+                    k = 0
+
+                remaining_energy[batch, freq_idx, i] = 0
+                if freq_idx < MAX_FREQ_IDX:
+                    remaining_energy[batch, freq_idx + 1, i] = 0
+                if freq_idx > 0:
+                    remaining_energy[batch, freq_idx - 1, i] = 0
+
+                i += 1
+
+            i_end = i - 1 - k  # go back to frame above threshold
+
+            # backward pass
+            i = i_mid - 1
+            k = 0
+            while i > 0 and k < energy_tol:
+                if remaining_energy[batch, freq_idx, i] < frame_thresh:
+                    k += 1
+                else:
+                    k = 0
+
+                remaining_energy[batch, freq_idx, i] = 0
+                if freq_idx < MAX_FREQ_IDX:
+                    remaining_energy[batch, freq_idx + 1, i] = 0
+                if freq_idx > 0:
+                    remaining_energy[batch, freq_idx - 1, i] = 0
+
+                i -= 1
+
+            i_start = i + 1 + k  # go back to frame above threshold
+            assert i_start >= 0, "{}".format(i_start)
+            assert i_end < n_frames
+
+            if i_end - i_start <= min_note_len:
+                # note is too short, skip it
+                continue
+            
+            bends = get_pitch_bends(contours, [batch, freq_idx, i_start, i_end], 25)
+            
+            # add the note
+            amplitude = np.mean(frames[i_start:i_end, freq_idx])
+            note_events.append(
+                (
+                    i_start,
+                    i_end,
+                    freq_idx + MIDI_OFFSET,
+                    amplitude,
+                )
+            )
+    
 
     return {"notes": notes, "velocity": amplitude}
 
@@ -542,4 +604,4 @@ print(onset.shape, contour.shape, note.shape)
 
 output = output_to_notes_polyphonic(note, onset, contour, 0.5, 0.3, 10, True, None, None)
 # torch.set_printoptions(threshold=10_000)
-print(output['notes'].nonzero())
+print(output['notes'])
