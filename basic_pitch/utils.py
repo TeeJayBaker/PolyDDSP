@@ -22,3 +22,13 @@ def tensor_midi_to_hz(midi_note: torch.Tensor) -> torch.Tensor:
     Convert a tensor of MIDI note numbers to a tensor of frequencies in Hz
     """
     return 440.0 * 2 ** ((midi_note - 69) / 12)
+
+def unravel_index(index: int, shape: tuple) -> tuple:
+    """
+    Convert a flat index into a multi-dimensional index
+    """
+    unravelled = []
+    for dim in reversed(shape):
+        unravelled.append(index % dim)
+        index = index // dim
+    return tuple(reversed(unravelled))

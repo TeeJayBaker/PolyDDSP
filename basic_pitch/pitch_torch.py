@@ -513,7 +513,7 @@ def output_to_notes_polyphonic(frames: torch.Tensor,
         energy_shape = remaining_energy.shape
 
         while torch.max(remaining_energy) > frame_thresh:
-            batch, freq_idx, i_mid = torch.unravel_index(torch.argmax(remaining_energy), energy_shape)
+            batch, freq_idx, i_mid = utils.unravel_index(torch.argmax(remaining_energy), energy_shape)
             remaining_energy[batch, freq_idx, i_mid] = 0
 
             # forward pass
@@ -561,18 +561,13 @@ def output_to_notes_polyphonic(frames: torch.Tensor,
                 continue
             
             bends = get_pitch_bends(contours, [batch, freq_idx, i_start, i_end], 25)
-            
-            # add the note
-            amplitude = np.mean(frames[i_start:i_end, freq_idx])
-            note_events.append(
-                (
-                    i_start,
-                    i_end,
-                    freq_idx + MIDI_OFFSET,
-                    amplitude,
-                )
-            )
-    
+
+            # if there is a gap in available voices, add the note
+            v = list(range(n_voices))
+            for j in range(n_voices):
+                if notes[batch, v[j], i_start:i_end].sum == 0:
+                    notes[batch, v[j], i_start:i_end] = utils.tensor_midi_to_hz(bends + MIDI_OFFSET)
+                    amplitude[batch, v[j], i_start:i_end] = frames[batch, freq_idx, i_start:i_end]
 
     return {"notes": notes, "velocity": amplitude}
 
