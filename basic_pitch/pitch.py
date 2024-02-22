@@ -1,5 +1,6 @@
 """
 Pitch prediction module, porting basic_pitch to pytorch
+optimise for parallel operation and straight to correct formatting
 """
 
 import torch
@@ -178,35 +179,6 @@ def argrelmax(x: torch.Tensor) -> torch.Tensor:
 
     return torch.nonzero((diff1 > 0) * (diff2 > 0), as_tuple=True)
 
-def midi_pitch_to_contour_bins(pitch_midi: int) -> np.array:
-    """Convert midi pitch to conrresponding index in contour matrix
-
-    Args:
-        pitch_midi: pitch in midi
-
-    Returns:
-        index in contour matrix
-
-    """
-    contour_bins_per_semitone = 3
-    annotation_base = 27.5
-    pitch_hz = utils.midi_to_hz(pitch_midi)
-    return 12.0 * contour_bins_per_semitone * np.log2(pitch_hz / annotation_base)
-
-def model_frames_to_time(n_frames: int) -> np.array:
-    original_times = original_times = librosa.core.frames_to_time(
-        np.arange(n_frames),
-        sr=AUDIO_SAMPLE_RATE,
-        hop_length=FFT_HOP,
-    )
-    window_numbers = np.floor(np.arange(n_frames) / ANNOT_N_FRAMES)
-    window_offset = (FFT_HOP / AUDIO_SAMPLE_RATE) * (
-        ANNOT_N_FRAMES - (AUDIO_N_SAMPLES / FFT_HOP)
-    ) + 0.0018  # this is a magic number, but it's needed for this to align properly
-    times = original_times - (window_offset * window_numbers)
-    return times
-
-
 class basic_pitch(nn.Module):
     """
     Port of basic_pitch pitch prediction to pytorch
@@ -344,7 +316,7 @@ class basic_pitch(nn.Module):
 
         return x
     
-    def forward(self, x):
+    def forward(self, x: torch.Tensor) -> dict[str, torch.tensor]:
         x = self.get_cqt(x, use_batchnorm=True)
 
         if self.n_harmonics > 1:
@@ -378,9 +350,67 @@ class basic_pitch(nn.Module):
 
         return {"onset": x_onset, "contour": x_contours, "note": x_notes}
     
+def midi_pitch_to_contour_bins(pitch_midi: int) -> int:
+    """Convert midi pitch to conrresponding index in contour matrix
+
+    Args:
+        pitch_midi: pitch in midi
+
+    Returns:
+        index in contour matrix
+
+    """
+    contour_bins_per_semitone = 3
+    annotation_base = 27.5
+    pitch_hz = utils.midi_to_hz(pitch_midi)
+    bin = 12.0 * contour_bins_per_semitone * np.log2(pitch_hz / annotation_base)
+    return int(np.round(bin))
+    
+def get_pitch_bends(contours: torch.Tensor,
+                    note_event: list[int],
+                    n_bins_tolerance: int = 25) -> torch.Tensor:
+    """
+    Get the pitch bends from the contour and note event predictions
+
+    Args:
+        contour: The contour predictions (batch, freq_bins, time_frames)
+        note_event: The note event predictions list(batch, freq, start_idx, end_idx)
+
+    Returns:
+        The pitch bend predictions (time_frames)
+    """
+    
+    contour_bins_per_semitone = 3
+    annotation_semitones = 88
+    n_freq_bins_contour = contour_bins_per_semitone * annotation_semitones
+
+    window_length = 2 * n_bins_tolerance + 1
+    freq_gaussian = torch.signal.windows.gaussian(window_length, std=5)
+
+    batch_idx, freq, start_idx, end_idx = note_event
+    freq_idx = midi_pitch_to_contour_bins(freq)
+    freq_start_idx = max(0, freq_idx - n_bins_tolerance)
+    freq_end_idx = min(n_freq_bins_contour, freq_idx + n_bins_tolerance + 1)
+
+    contours_trans = contours.permute(0, 2, 1)
+
+    pitch_bend_submatrix = (
+        contours_trans[
+            batch_idx, start_idx:end_idx, freq_start_idx:freq_end_idx
+        ] * freq_gaussian[
+            max([0, n_bins_tolerance - freq_idx]) : window_length 
+            - max([0, freq_idx - (n_freq_bins_contour - n_bins_tolerance - 1)])
+        ]
+    )
+
+    pb_shift = n_bins_tolerance - max([0, n_bins_tolerance - freq_idx])
+    bends = (torch.argmax(pitch_bend_submatrix, axis=1) - pb_shift) * 0.25 + freq
+            
+    return bends
 
 def output_to_notes_polyphonic(frames: torch.Tensor,
                                onsets: torch.Tensor,
+                               contours: torch.Tensor,
                                onset_thresh: float,
                                frame_thresh: float,
                                min_note_len: int,
@@ -388,7 +418,8 @@ def output_to_notes_polyphonic(frames: torch.Tensor,
                                max_freq: Optional[float],
                                min_freq: Optional[float],
                                melodia_trick: bool = True,
-                               energy_tol: int = 11) -> list[tuple[int, int, int, float]]:
+                               n_voices: int = 10,
+                               energy_tol: int = 11) -> dict[str, torch.tensor]:
     """
     Convert pitch predictions to note predictions
 
@@ -405,10 +436,10 @@ def output_to_notes_polyphonic(frames: torch.Tensor,
         energy_tol: The energy tolerance for the Melodia trick
 
     Returns:
-        A list of notes in the format (start_time, end_time, pitch, velocity)
+        a dict containing the notes tensor (n_voices, time_frames) and velocity tensor (n_voices, time_frames)
     """
-
     n_frames = frames.shape[-1]
+    n_batch = frames.shape[0]
 
     onsets, frames = constrain_frequency(onsets, frames, max_freq, min_freq)
     # use onsets inferred from frames in addition to the predicted onsets
@@ -419,17 +450,20 @@ def output_to_notes_polyphonic(frames: torch.Tensor,
     peaks = argrelmax(onsets)
     peak_thresh_mat[peaks] = onsets[peaks]
 
-    onset_idx = torch.nonzero(peak_thresh_mat >= onset_thresh)
-    onset_idx = onset_idx.flip([0])
+
+    # permute to make time dimension 1, to ensure time is sorted before frequency
+    onset_idx = torch.nonzero(peak_thresh_mat.permute([0,2,1]) >= onset_thresh)
+    # return columns to original order
+    onset_idx = torch.cat([onset_idx[:, 0:1], onset_idx[:, 2:3], onset_idx[:, 1:2]], dim=1)
+    # sort backwards in time?
+    #onset_idx = onset_idx.flip([0])
 
     remaining_energy = torch.clone(frames)
 
-    onsets.detach().cpu().numpy()
-    frames.detach().cpu().numpy()
-    remaining_energy.detach().cpu().numpy()
-    onset_idx.detach().cpu().numpy()
+    notes = torch.zeros((n_batch, n_voices, n_frames), dtype=torch.float32)
+    amplitude = torch.zeros((n_batch, n_voices, n_frames), dtype=torch.float32)
 
-    note_events = []
+    # from each onset_idx, search for strings of frames that are above the frame threshold in remaining_energy, allowing for gaps shorter than energy_tol
     for batch_idx, freq_idx, note_start_idx in onset_idx:
         # if we're too close to the end of the audio, continue
         if note_start_idx >= n_frames - 1:
@@ -457,39 +491,45 @@ def output_to_notes_polyphonic(frames: torch.Tensor,
         if freq_idx > 0:
             remaining_energy[batch_idx, freq_idx - 1, note_start_idx:i] = 0
 
-        # add the note
-        amplitude = np.mean(frames[batch_idx, freq_idx, note_start_idx:i])
-        note_events.append(
-            (
-                note_start_idx,
-                i,
-                freq_idx + MIDI_OFFSET,
-                amplitude,
-            )
-        )
-    
+        bends = get_pitch_bends(contours, [batch_idx, freq_idx, note_start_idx, i], 25)
+
+        # need to assign notes to voices, first in first out.
+        # keep track of voice allocation order
+        v = list(range(n_voices))
+        for j in range(n_voices):
+            if notes[batch_idx, v[j], note_start_idx] == 0:
+                notes[batch_idx, v[j], note_start_idx:i] = utils.tensor_midi_to_hz(bends + MIDI_OFFSET)
+                amplitude[batch_idx, v[j], note_start_idx:i] = frames[batch_idx, freq_idx, note_start_idx:i]
+                v.insert(0, v.pop(j))
+                break
+            #if no free voice set the lowest amplitude voice to the new note
+            if j == n_voices - 1:
+                min_idx = torch.argmin(torch.mean(amplitude[batch_idx, :, note_start_idx:i], dim=1))
+                notes[batch_idx, min_idx, note_start_idx:i] = utils.tensor_midi_to_hz(bends + MIDI_OFFSET)
+                amplitude[batch_idx, min_idx, note_start_idx:i] = frames[batch_idx, freq_idx, note_start_idx:i]
+                v.insert(0, v.pop(v.index(min_idx)))
+
     if melodia_trick:
-        # remove spurious notes using the Melodia trick
         energy_shape = remaining_energy.shape
 
-        while np.max(remaining_energy) > frame_thresh:
-            batch_idx, freq_idx, i_mid = np.unravel_index(np.argmax(remaining_energy), energy_shape)
-            remaining_energy[batch_idx, freq_idx, i_mid] = 0
+        while torch.max(remaining_energy) > frame_thresh:
+            batch, freq_idx, i_mid = utils.unravel_index(torch.argmax(remaining_energy), energy_shape)
+            remaining_energy[batch, freq_idx, i_mid] = 0
 
             # forward pass
             i = i_mid + 1
             k = 0
             while i < n_frames - 1 and k < energy_tol:
-                if remaining_energy[batch_idx, freq_idx, i] < frame_thresh:
+                if remaining_energy[batch, freq_idx, i] < frame_thresh:
                     k += 1
                 else:
                     k = 0
 
-                remaining_energy[batch_idx, freq_idx, i] = 0
+                remaining_energy[batch, freq_idx, i] = 0
                 if freq_idx < MAX_FREQ_IDX:
-                    remaining_energy[batch_idx, freq_idx + 1, i] = 0
+                    remaining_energy[batch, freq_idx + 1, i] = 0
                 if freq_idx > 0:
-                    remaining_energy[batch_idx, freq_idx - 1, i] = 0
+                    remaining_energy[batch, freq_idx - 1, i] = 0
 
                 i += 1
 
@@ -499,16 +539,16 @@ def output_to_notes_polyphonic(frames: torch.Tensor,
             i = i_mid - 1
             k = 0
             while i > 0 and k < energy_tol:
-                if remaining_energy[batch_idx, freq_idx, i] < frame_thresh:
+                if remaining_energy[batch, freq_idx, i] < frame_thresh:
                     k += 1
                 else:
                     k = 0
 
-                remaining_energy[batch_idx, freq_idx, i] = 0
+                remaining_energy[batch, freq_idx, i] = 0
                 if freq_idx < MAX_FREQ_IDX:
-                    remaining_energy[batch_idx, freq_idx + 1, i] = 0
+                    remaining_energy[batch, freq_idx + 1, i] = 0
                 if freq_idx > 0:
-                    remaining_energy[batch_idx, freq_idx - 1, i] = 0
+                    remaining_energy[batch, freq_idx - 1, i] = 0
 
                 i -= 1
 
@@ -519,154 +559,44 @@ def output_to_notes_polyphonic(frames: torch.Tensor,
             if i_end - i_start <= min_note_len:
                 # note is too short, skip it
                 continue
+            
+            bends = get_pitch_bends(contours, [batch, freq_idx, i_start, i_end], 25)
 
-            # add the note
-            amplitude = np.mean(frames[batch_idx, freq_idx, i_start:i_end])
-            note_events[batch_idx].append(
-                (
-                    i_start,
-                    i_end,
-                    freq_idx + MIDI_OFFSET,
-                    amplitude,
-                )
-            )
+            # if there is a gap in available voices, add the note
+            v = list(range(n_voices))
+            for j in range(n_voices):
+                if notes[batch, v[j], i_start:i_end].sum == 0:
+                    notes[batch, v[j], i_start:i_end] = utils.tensor_midi_to_hz(bends + MIDI_OFFSET)
+                    amplitude[batch, v[j], i_start:i_end] = frames[batch, freq_idx, i_start:i_end]
 
-    return note_events
-
-def get_pitch_bends(contours: torch.Tensor,
-                    note_events: list[tuple[int, int, int, float]],
-                    n_bins_tolerance: int = 25) -> list[tuple[int, int, int, float, Optional[list[int]]]]:
-    """
-    Given note events and contours, estimate pitch bends per note.
-    Pitch bends are represented as a sequence of evenly spaced midi pitch bend control units.
-    The time stamps of each pitch bend can be inferred by computing an evenly spaced grid between
-    the start and end times of each note event.
-
-    Args:
-        contours: Matrix of estimated pitch contours
-        note_events: note event tuple
-        n_bins_tolerance: Pitch bend estimation range. Defaults to 25.
-
-    Returns:
-        note events with pitch bends
-    """
-    contour_bins_per_semitone = 3
-    annotation_semitones = 88
-    n_freq_bins_contour = contour_bins_per_semitone * annotation_semitones
-
-    window_length = 2 * n_bins_tolerance + 1
-    freq_gaussian = torch.signal.windows.gaussian(window_length, std=5)
-    note_events_with_pitch_bends = []
-    for batch_idx in len(note_events):
-        for start_idx, end_idx, pitch_midi, amplitude in note_events[batch_idx]:
-            freq_idx = int(np.round(midi_pitch_to_contour_bins(pitch_midi)))
-            freq_start_idx = np.max([freq_idx - n_bins_tolerance, 0])
-            freq_end_idx = np.min([n_freq_bins_contour, freq_idx + n_bins_tolerance + 1])
-
-            pitch_bend_submatrix = (
-                contours[
-                    batch_idx, freq_start_idx:freq_end_idx, start_idx:end_idx
-                ] * freq_gaussian[
-                    np.max([0, n_bins_tolerance - freq_idx]) : window_length 
-                    - np.max([0, freq_idx - (n_freq_bins_contour - n_bins_tolerance - 1)])
-                ]
-            )
-            pb_shift = n_bins_tolerance - np.max([0, n_bins_tolerance - freq_idx])
-
-            pitch_bend_submatrix.detach().cpu().numpy()
-
-            bends: Optional[list[int]] = list(
-                np.argmax(pitch_bend_submatrix, axis=1) - pb_shift
-            )  # this is in units of 1/3 semitones
-            note_events_with_pitch_bends[batch_idx].append((start_idx, end_idx, pitch_midi, amplitude, bends))
-
-    return note_events_with_pitch_bends
-
-
-def model_output_to_notes(output: dict[str, torch.Tensor],
-                          onset_thresh: float,
-                          frame_thresh: float,
-                          infer_onsets: bool = True,
-                          min_note_len: int = 11,
-                          min_freq: Optional[float] = None,
-                          max_freq: Optional[float] = None,
-                          include_pitch_bends: bool = True,
-                          multple_pitch_bends: bool = False,
-                          return_frames: bool = True,
-                          melodia_trick: bool = True) -> list[tuple[float, float, int, float, Optional[list[int]]]]:
-    """
-    Convert pitch predictions to note predictions
-
-    Args:
-        output: A dictionary with shape
-            {
-                'frame': array of shape (batch, n_freqs, n_times),
-                'onset': array of shape (batch, n_freqs, n_times),
-                'contour': array of shape (batch, 3 * n_freqs, n_times)
-            }
-            representing the output of the basic pitch model.
-        onset_thresh: Minimum amplitude of an onset activation to be considered an onset.
-        infer_onsets: If True, add additional onsets when there are large differences in frame amplitudes.
-        min_note_len: The minimum allowed note length in frames.
-        min_freq: Minimum allowed output frequency, in Hz. If None, all frequencies are used.
-        max_freq: Maximum allowed output frequency, in Hz. If None, all frequencies are used.
-        include_pitch_bends: If True, include pitch bends.
-        multiple_pitch_bends: If True, allow overlapping notes in midi file to have pitch bends.
-        melodia_trick: Use the melodia post-processing step.
-
-    Returns:
-        A list of notes in the format (start_time, end_time, pitch, velocity, pitch_bends)
-    """
-    frames = output["frame"]
-    onsets = output["onset"]
-    contours = output["contour"]
-
-    estimated_notes = output_to_notes_polyphonic(
-        frames, 
-        onsets, 
-        onset_thresh, 
-        frame_thresh, 
-        min_note_len, 
-        infer_onsets, 
-        max_freq, 
-        min_freq, 
-        melodia_trick
-    )
-    
-    if include_pitch_bends:
-        estimated_notes_with_pitch_bend = get_pitch_bends(contours, estimated_notes)
-    else:
-        estimated_notes_with_pitch_bend = [(note[0], note[1], note[2], note[3], None) for note in estimated_notes]
-
-    if return_frames:
-        return estimated_notes_with_pitch_bend
-    
-    times_s = model_frames_to_time(contours.shape[-1])
-    estimated_notes_time_seconds = [
-        (times_s[note[0]], times_s[note[1]], note[2], note[3], note[4]) for note in estimated_notes_with_pitch_bend
-    ]
-
-    return estimated_notes_time_seconds
-
-def convert_to_voices(notes: list[tuple[float, float, int, float, Optional[list[int]]]], 
-                      n_voices: int) -> np.ndarray:
-    """
-    Convert notes to a matrix of voices
-
-    Args:
-        notes: A list of notes in the format (start_frame, end_frame, pitch, velocity, pitch_bends)
-    
-    Returns:
-        A matrix of voices in the format (time_frames, n_voices)
-    """
-
-    notes = pd.DataFrame(notes, columns=["start_frame", "end_frame", "pitch", "velocity", "pitch_bends"])
-    notes = notes.sort_values("start_frame")
-    notes = notes.reset_index(drop=True)
-
+    return {"notes": notes, "velocity": amplitude}
 
 frames = torch.rand(1, 88, 100)
 onsets = torch.rand(1, 88, 100)
+contours = torch.rand(1, 88, 100)
 
-output = output_to_notes_polyphonic(frames, onsets, 0.5, 0.5, 10, True, None, None)
-print(output)
+from basic_pitch.inference import predict
+from basic_pitch import ICASSP_2022_MODEL_PATH
+
+model_output, midi_data, note_events = predict("basic_pitch/01_BN2-131-B_solo_mic.wav")
+# model_output, midi_data, note_events = predict("basic_pitch/jazz_2_170BPM.wav")
+onset = torch.Tensor(model_output["onset"]).unsqueeze(0).permute(0, 2, 1)
+contour = torch.Tensor(model_output["contour"]).unsqueeze(0).permute(0, 2, 1)
+note = torch.Tensor(model_output["note"]).unsqueeze(0).permute(0, 2, 1)
+
+# print spectogram of onset, countour and note
+# import matplotlib.pyplot as plt
+# plt.figure(figsize=(10, 10))
+# plt.subplot(3, 1, 1)
+# plt.imshow(onset[0].detach().numpy(), aspect='auto')
+# plt.subplot(3, 1, 2)
+# plt.imshow(countour[0].detach().numpy(), aspect='auto')
+# plt.subplot(3, 1, 3)
+# plt.imshow(note[0].detach().numpy(), aspect='auto')
+# plt.show()
+
+print(onset.shape, contour.shape, note.shape)
+
+output = output_to_notes_polyphonic(note, onset, contour, 0.5, 0.3, 10, True, None, None)
+# torch.set_printoptions(threshold=10_000)
+print(output['notes'])
