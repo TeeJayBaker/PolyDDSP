@@ -411,12 +411,12 @@ def get_pitch_bends(contours: torch.Tensor,
 def output_to_notes_polyphonic(frames: torch.Tensor,
                                onsets: torch.Tensor,
                                contours: torch.Tensor,
-                               onset_thresh: float,
-                               frame_thresh: float,
-                               min_note_len: int,
-                               infer_onsets: bool,
-                               max_freq: Optional[float],
-                               min_freq: Optional[float],
+                               onset_thresh: float = 0.5,
+                               frame_thresh: float = 0.3,
+                               min_note_len: int= 10,
+                               infer_onsets: bool = True,
+                               max_freq: Optional[float] = None,
+                               min_freq: Optional[float] = None,
                                melodia_trick: bool = True,
                                n_voices: int = 10,
                                energy_tol: int = 11) -> dict[str, torch.tensor]:
@@ -571,18 +571,58 @@ def output_to_notes_polyphonic(frames: torch.Tensor,
 
     return {"notes": notes, "velocity": amplitude}
 
+from tensorflow import saved_model
+from basic_pitch.inference import window_audio_file, unwrap_output
+from basic_pitch import ICASSP_2022_MODEL_PATH
+
+def basic_pitch_predict_tf(audio):
+    overlap_len = 30 * 256
+    hop_size = 22050 * 2 - 256 - overlap_len
+    n_overlapping_frames = 30
+
+    audio_original_length = audio.shape[-1]
+    model = saved_model.load(str(ICASSP_2022_MODEL_PATH))
+    audio_original = np.concatenate([np.zeros((int(overlap_len / 2),), dtype=np.float32), audio])
+    audio_windowed, _ = window_audio_file(audio_original, hop_size)
+    output = model(audio_windowed)
+    unwrapped_output = {k: unwrap_output(output[k], audio_original_length, n_overlapping_frames) for k in output}
+
+    return unwrapped_output
+
+class PitchEncoder(nn.Module):
+    """
+    Pitch encoder, returns pitch and amplitude from raw audio sorted into voices
+
+    args:
+        device: Specify whether computed on cpu, cuda or mps
+
+    input: Audio input of size (batch, samples)
+    output: Dictionary of audio features (pitches, amplitude)
+        pitches: Pitch features of size (batch, voices, frames)
+        amplitude: Amplitude features of size (batch, voices, frames)
+    """
+
+    def __init__(self, device: str = 'mps'):
+        super(PitchEncoder, self).__init__()
+        self.device = device
+
+    def forward(self, x: torch.Tensor) -> dict[str, torch.Tensor]:
+
+        raise NotImplementedError
+
 frames = torch.rand(1, 88, 100)
 onsets = torch.rand(1, 88, 100)
 contours = torch.rand(1, 88, 100)
 
-from basic_pitch.inference import predict
-from basic_pitch import ICASSP_2022_MODEL_PATH
+audio = librosa.load("basic_pitch/01_BN2-131-B_solo_mic.wav", sr=22050)[0]
+output = basic_pitch_predict_tf(audio)
+print(output)
 
-model_output, midi_data, note_events = predict("basic_pitch/01_BN2-131-B_solo_mic.wav")
+# model_output, midi_data, note_events = predict("basic_pitch/01_BN2-131-B_solo_mic.wav")
 # model_output, midi_data, note_events = predict("basic_pitch/jazz_2_170BPM.wav")
-onset = torch.Tensor(model_output["onset"]).unsqueeze(0).permute(0, 2, 1)
-contour = torch.Tensor(model_output["contour"]).unsqueeze(0).permute(0, 2, 1)
-note = torch.Tensor(model_output["note"]).unsqueeze(0).permute(0, 2, 1)
+# onset = torch.Tensor(model_output["onset"]).unsqueeze(0).permute(0, 2, 1)
+# contour = torch.Tensor(model_output["contour"]).unsqueeze(0).permute(0, 2, 1)
+# note = torch.Tensor(model_output["note"]).unsqueeze(0).permute(0, 2, 1)
 
 # print spectogram of onset, countour and note
 # import matplotlib.pyplot as plt
@@ -595,8 +635,8 @@ note = torch.Tensor(model_output["note"]).unsqueeze(0).permute(0, 2, 1)
 # plt.imshow(note[0].detach().numpy(), aspect='auto')
 # plt.show()
 
-print(onset.shape, contour.shape, note.shape)
+# print(onset.shape, contour.shape, note.shape)
 
-output = output_to_notes_polyphonic(note, onset, contour, 0.5, 0.3, 10, True, None, None)
+# output = output_to_notes_polyphonic(note, onset, contour, 0.5, 0.3, 10, True, None, None)
 # torch.set_printoptions(threshold=10_000)
-print(output['notes'])
+# print(output['notes'])
