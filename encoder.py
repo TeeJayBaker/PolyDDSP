@@ -8,7 +8,7 @@ import torch.nn.functional as F
 import numpy as np
 
 from modules.loudness import LoudnessExtractor
-from basic_pitch.pitch import PitchEncoder
+from pitch_encoder.pitch import PitchEncoder
 
 class MonoTimbreEncoder(nn.Module):
     def __init__(self, pitch_dim, spectrogram_dim, hidden_dim, z_dim):
