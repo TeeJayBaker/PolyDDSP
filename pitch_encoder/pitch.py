@@ -571,23 +571,38 @@ def output_to_notes_polyphonic(frames: torch.Tensor,
 
     return {"notes": notes, "velocity": amplitude}
 
+import tensorflow as tf
 from tensorflow import saved_model
 from basic_pitch.inference import window_audio_file, unwrap_output
 from basic_pitch import ICASSP_2022_MODEL_PATH
 
 def basic_pitch_predict_tf(audio):
+
     overlap_len = 30 * 256
     hop_size = 22050 * 2 - 256 - overlap_len
     n_overlapping_frames = 30
 
+    np_audio = audio.numpy()
+    tf_audio = tf.convert_to_tensor(np_audio, dtype=tf.float32)
     audio_original_length = audio.shape[-1]
+    batch = audio.shape[0]
     model = saved_model.load(str(ICASSP_2022_MODEL_PATH))
-    audio_original = np.concatenate([np.zeros((int(overlap_len / 2),), dtype=np.float32), audio])
-    audio_windowed, _ = window_audio_file(audio_original, hop_size)
-    output = model(audio_windowed)
-    unwrapped_output = {k: unwrap_output(output[k], audio_original_length, n_overlapping_frames) for k in output}
 
-    return unwrapped_output
+    audio_original = tf.concat([tf.zeros((batch, int(overlap_len / 2),), dtype=tf.float32), tf_audio], axis=1)
+    audio_windowed, _ = window_audio_file(audio_original, hop_size)
+
+    windows = audio_windowed.shape[1]
+    audio_windowed = tf.reshape(audio_windowed, (batch * windows, audio_windowed.shape[2], -1))
+
+    output = model(audio_windowed)
+
+    unwrapped_output = {k: unwrap_output(output[k], audio_original_length, n_overlapping_frames) for k in output}
+    unwrapped_output_np = {k: unwrapped_output[k].reshape((batch, -1, unwrapped_output[k].shape[-1])) for k in unwrapped_output}
+    note = torch.Tensor(unwrapped_output_np['note'])
+    onset = torch.Tensor(unwrapped_output_np['onset'])
+    contour = torch.Tensor(unwrapped_output_np['contour'])
+
+    return note, onset, contour
 
 class PitchEncoder(nn.Module):
     """
@@ -607,15 +622,20 @@ class PitchEncoder(nn.Module):
         self.device = device
 
     def forward(self, x: torch.Tensor) -> dict[str, torch.Tensor]:
-
-        raise NotImplementedError
+        # Check if input is batched
+        torch._assert(len(x.shape) == 2, "audio must be batched")
+        note, onset, contour = basic_pitch_predict_tf(x)
+        output = output_to_notes_polyphonic(note, onset, contour, 0.5, 0.3, 10, True, None, None)
+        raise output
 
 frames = torch.rand(1, 88, 100)
 onsets = torch.rand(1, 88, 100)
 contours = torch.rand(1, 88, 100)
 
-audio = librosa.load("basic_pitch/01_BN2-131-B_solo_mic.wav", sr=22050)[0]
-output = basic_pitch_predict_tf(audio)
+audio = librosa.load("pitch_encoder/01_BN2-131-B_solo_mic.wav", sr=22050)[0]
+audio = torch.tensor(audio).unsqueeze(0)
+model = PitchEncoder()
+output = model(audio)
 print(output)
 
 # model_output, midi_data, note_events = predict("basic_pitch/01_BN2-131-B_solo_mic.wav")
