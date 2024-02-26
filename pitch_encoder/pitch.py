@@ -598,9 +598,9 @@ def basic_pitch_predict_tf(audio):
 
     unwrapped_output = {k: unwrap_output(output[k], audio_original_length, n_overlapping_frames) for k in output}
     unwrapped_output_np = {k: unwrapped_output[k].reshape((batch, -1, unwrapped_output[k].shape[-1])) for k in unwrapped_output}
-    note = torch.Tensor(unwrapped_output_np['note'])
-    onset = torch.Tensor(unwrapped_output_np['onset'])
-    contour = torch.Tensor(unwrapped_output_np['contour'])
+    note = torch.Tensor(unwrapped_output_np['note']).permute(0, 2, 1)
+    onset = torch.Tensor(unwrapped_output_np['onset']).permute(0, 2, 1)
+    contour = torch.Tensor(unwrapped_output_np['contour']).permute(0, 2, 1)
 
     return note, onset, contour
 
@@ -626,37 +626,11 @@ class PitchEncoder(nn.Module):
         torch._assert(len(x.shape) == 2, "audio must be batched")
         note, onset, contour = basic_pitch_predict_tf(x)
         output = output_to_notes_polyphonic(note, onset, contour, 0.5, 0.3, 10, True, None, None)
-        raise output
+        return output
 
-frames = torch.rand(1, 88, 100)
-onsets = torch.rand(1, 88, 100)
-contours = torch.rand(1, 88, 100)
 
 audio = librosa.load("pitch_encoder/01_BN2-131-B_solo_mic.wav", sr=22050)[0]
 audio = torch.tensor(audio).unsqueeze(0)
 model = PitchEncoder()
 output = model(audio)
 print(output)
-
-# model_output, midi_data, note_events = predict("basic_pitch/01_BN2-131-B_solo_mic.wav")
-# model_output, midi_data, note_events = predict("basic_pitch/jazz_2_170BPM.wav")
-# onset = torch.Tensor(model_output["onset"]).unsqueeze(0).permute(0, 2, 1)
-# contour = torch.Tensor(model_output["contour"]).unsqueeze(0).permute(0, 2, 1)
-# note = torch.Tensor(model_output["note"]).unsqueeze(0).permute(0, 2, 1)
-
-# print spectogram of onset, countour and note
-# import matplotlib.pyplot as plt
-# plt.figure(figsize=(10, 10))
-# plt.subplot(3, 1, 1)
-# plt.imshow(onset[0].detach().numpy(), aspect='auto')
-# plt.subplot(3, 1, 2)
-# plt.imshow(countour[0].detach().numpy(), aspect='auto')
-# plt.subplot(3, 1, 3)
-# plt.imshow(note[0].detach().numpy(), aspect='auto')
-# plt.show()
-
-# print(onset.shape, contour.shape, note.shape)
-
-# output = output_to_notes_polyphonic(note, onset, contour, 0.5, 0.3, 10, True, None, None)
-# torch.set_printoptions(threshold=10_000)
-# print(output['notes'])
