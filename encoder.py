@@ -5,21 +5,52 @@ Encoder for the VAE architecture
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
+import torchaudio
 import numpy as np
 
 from modules.loudness import LoudnessExtractor
 from pitch_encoder.pitch import PitchEncoder
 
 class MonoTimbreEncoder(nn.Module):
-    def __init__(self, pitch_dim, spectrogram_dim, hidden_dim, z_dim):
+    def __init__(self, sr: int = 16000,
+                 frame_length: int = 64,
+                 use_z: bool = True,
+                 z_units: int = 16,
+                 n_fft: int = 2048,
+                 n_mels: int = 128,
+                 n_mfcc: int = 30,
+                 gru_units: int = 512,
+                 bidirectional: bool = True):
         super(MonoTimbreEncoder, self).__init__()
-        self.pitch_encoder = Encoder(pitch_dim, hidden_dim, z_dim)
-        self.spectrogram_encoder = Encoder(spectrogram_dim, hidden_dim, z_dim)
-    
-    def forward(self, pitch, spectrogram):
-        pitch_z = self.pitch_encoder(pitch)
-        spectrogram_z = self.spectrogram_encoder(spectrogram)
-        return pitch_z, spectrogram_z
+
+        self.mfcc = torchaudio.transforms.MFCC(
+            sample_rate=sr,
+            n_mfcc=n_mfcc,
+            log_mels=True,
+            melkwargs=dict(
+                n_fft=n_fft, hop_length=frame_length, n_mels=n_mels, f_min=20.0, f_max=8000.0,
+            ),
+        )
+
+        self.norm = nn.InstanceNorm1d(n_mfcc, affine=True)
+        self.permute = lambda x: x.permute(0, 2, 1)
+        self.gru = nn.GRU(
+            input_size=n_mfcc,
+            hidden_size=gru_units,
+            num_layers=1,
+            batch_first=True,
+            bidirectional=bidirectional,
+        )
+        self.dense = nn.Linear(gru_units * 2 if bidirectional else gru_units, z_units)
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        x = self.mfcc(x)
+        x = x[:, :, :-1]
+        x = self.norm(x)
+        x = self.permute(x)
+        x, _ = self.gru(x)
+        x = self.dense(x)
+        return x
     
 class Encoder(nn.Module):
     """
@@ -54,7 +85,7 @@ class Encoder(nn.Module):
                  n_mfcc: int = 30,
                  gru_units: int = 512,
                  bidirectional: bool = True,
-                 device: str = 'mps'):
+                 device: str = 'cpu'):
         
         super(Encoder, self).__init__()
 
@@ -63,8 +94,10 @@ class Encoder(nn.Module):
         self.device = device
 
         self.loudness_extractor = LoudnessExtractor(sr, frame_length, device = device)
+        self.pitch_encoder = PitchEncoder(device = device)
+        self.use_z = use_z
 
-        if use_z:
+        if self.use_z:
             self.timbre_encoder = MonoTimbreEncoder(sr, 
                                                     n_fft, 
                                                     frame_length, 
@@ -75,11 +108,17 @@ class Encoder(nn.Module):
                                                     bidirectional)
             
     
-    def forward(self, x):
+    def forward(self, x: torch.Tensor) -> dict[str, torch.Tensor]:
         features = {}
         features['loudness'] = self.loudness_extractor(x)
-        features['pitches'] = self.pitches_extractor(x)
+        features['pitches'] = self.pitch_encoder(x)
         if self.use_z:
             features['timbre'] = self.timbre_encoder(x)
         return features
     
+import librosa
+audio = librosa.load("pitch_encoder/01_BN2-131-B_solo_mic.wav", sr=22050)[0]
+audio = torch.tensor(audio).unsqueeze(0).to('cpu')
+model = Encoder()
+output = model(audio)
+print(output)

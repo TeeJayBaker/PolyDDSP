@@ -8,10 +8,9 @@ import torch.nn as nn
 import torch.nn.functional as F
 
 import numpy as np
-import nnAudio.features.cqt as nnAudio
+import pitch_encoder.nnAudio.features.cqt as nnAudio
 import math
-import utils
-import librosa
+import pitch_encoder.utils as utils
 import pandas as pd
 from typing import Optional
 
@@ -628,7 +627,7 @@ class PitchEncoder(nn.Module):
         output = output_to_notes_polyphonic(note, onset, contour, 0.5, 0.3, 10, True, None, None)
         return output
 
-
+import librosa
 audio = librosa.load("pitch_encoder/01_BN2-131-B_solo_mic.wav", sr=22050)[0]
 audio = torch.tensor(audio).unsqueeze(0)
 model = PitchEncoder()
