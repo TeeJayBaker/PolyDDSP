@@ -418,7 +418,7 @@ def output_to_notes_polyphonic(frames: torch.Tensor,
                                min_freq: Optional[float] = None,
                                melodia_trick: bool = True,
                                n_voices: int = 10,
-                               energy_tol: int = 11) -> dict[str, torch.tensor]:
+                               energy_tol: int = 11) -> tuple[torch.Tensor, torch.Tensor]:
     """
     Convert pitch predictions to note predictions
 
@@ -435,7 +435,7 @@ def output_to_notes_polyphonic(frames: torch.Tensor,
         energy_tol: The energy tolerance for the Melodia trick
 
     Returns:
-        a dict containing the notes tensor (n_voices, time_frames) and velocity tensor (n_voices, time_frames)
+        a tuple containing the notes tensor (n_voices, time_frames) and velocity tensor (n_voices, time_frames)
     """
     n_frames = frames.shape[-1]
     n_batch = frames.shape[0]
@@ -568,7 +568,7 @@ def output_to_notes_polyphonic(frames: torch.Tensor,
                     notes[batch, v[j], i_start:i_end] = utils.tensor_midi_to_hz(bends + MIDI_OFFSET)
                     amplitude[batch, v[j], i_start:i_end] = frames[batch, freq_idx, i_start:i_end]
 
-    return {"notes": notes, "velocity": amplitude}
+    return notes, amplitude
 
 import tensorflow as tf
 from tensorflow import saved_model
@@ -611,7 +611,7 @@ class PitchEncoder(nn.Module):
         device: Specify whether computed on cpu, cuda or mps
 
     input: Audio input of size (batch, samples)
-    output: Dictionary of audio features (pitches, amplitude)
+    output: tuple of audio features (pitches, amplitude)
         pitches: Pitch features of size (batch, voices, frames)
         amplitude: Amplitude features of size (batch, voices, frames)
     """
@@ -620,16 +620,10 @@ class PitchEncoder(nn.Module):
         super(PitchEncoder, self).__init__()
         self.device = device
 
-    def forward(self, x: torch.Tensor) -> dict[str, torch.Tensor]:
+    def forward(self, x: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
         # Check if input is batched
         torch._assert(len(x.shape) == 2, "audio must be batched")
         note, onset, contour = basic_pitch_predict_tf(x)
-        output = output_to_notes_polyphonic(note, onset, contour, 0.5, 0.3, 10, True, None, None)
-        return output
+        notes, amplitude = output_to_notes_polyphonic(note, onset, contour, 0.5, 0.3, 10, True, None, None)
+        return notes, amplitude
 
-import librosa
-audio = librosa.load("pitch_encoder/01_BN2-131-B_solo_mic.wav", sr=22050)[0]
-audio = torch.tensor(audio).unsqueeze(0)
-model = PitchEncoder()
-output = model(audio)
-print(output)
