@@ -65,6 +65,7 @@ class MonoTimbreEncoder(nn.Module):
         x = self.permute(x)
         x, _ = self.gru(x)
         x = self.dense(x)
+        x = self.permute(x)
         return x
     
 class Encoder(nn.Module):
@@ -92,7 +93,7 @@ class Encoder(nn.Module):
         timbre: Timbre features of size (batch, frames, z_units)
     """
     def __init__(self, sr: int = 22050,
-                 frame_length: int = 64,
+                 frame_length: int = 256,
                  use_z: bool = True,
                  z_units: int = 16,
                  n_fft: int = 2048,
@@ -132,7 +133,7 @@ class Encoder(nn.Module):
         return features
     
 import librosa
-audio = librosa.load("pitch_encoder/01_BN2-131-B_solo_mic.wav", sr=22050)[0]
+audio = librosa.load("pitch_encoder/01_BN2-131-B_solo_mic.wav", sr=22050, duration=1)[0]
 
 print(audio.shape)
 audio = torch.tensor(audio).unsqueeze(0).to('cpu')
