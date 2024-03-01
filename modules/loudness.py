@@ -22,7 +22,7 @@ class LoudnessExtractor(nn.Module):
     """
     def __init__(self,
                 sr: int = 16000,
-                frame_length: int = 64,
+                frame_length: int = 512,
                 attenuate_gain: float = 2.,
                 device: str = 'mps'):
     
@@ -30,7 +30,7 @@ class LoudnessExtractor(nn.Module):
 
         self.sr = sr
         self.frame_length = frame_length
-        self.n_fft = self.frame_length # * 5
+        self.n_fft = frame_length * 4
         self.device = device
         self.attenuate_gain = attenuate_gain
         self.smoothing_window = nn.Parameter(torch.hann_window(self.n_fft, dtype = torch.float32), 
@@ -60,7 +60,7 @@ class LoudnessExtractor(nn.Module):
                 - torch.log10(f_sq + const[1])
                 - 0.5 * torch.log10(f_sq + const[2])
                 - 0.5 * torch.log10(f_sq + const[3])
-                )       
+                )
         
         if min_db is None:
             return weights
@@ -72,15 +72,15 @@ class LoudnessExtractor(nn.Module):
         Compute loudness envelopes for audio input
         """
 
-        padded_audio = F.pad(audio, (self.frame_length // 2, self.frame_length // 2))
+        padded_audio = F.pad(audio, (self.n_fft // 2, self.n_fft // 2))
         # sliced_audio = padded_audio.unfold(1, self.n_fft, self.frame_length)
         # sliced_windowed_audio = sliced_audio * self.smoothing_window
 
 
         # compute FFT step
         s = torch.stft(padded_audio, 
-                                n_fft=self.frame_length, 
-                                window=torch.hann_window(self.frame_length), 
+                                n_fft=self.n_fft, 
+                                window=torch.hann_window(self.n_fft), 
                                 center=False, 
                                 return_complex=True)
         
