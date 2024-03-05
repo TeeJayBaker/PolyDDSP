@@ -72,17 +72,19 @@ class LoudnessExtractor(nn.Module):
         Compute loudness envelopes for audio input
         """
 
-        padded_audio = F.pad(audio, (self.n_fft // 2, self.n_fft // 2))
+        # padded_audio = F.pad(audio, (self.n_fft // 2, self.n_fft // 2))
+        padded_audio = audio
         # sliced_audio = padded_audio.unfold(1, self.n_fft, self.frame_length)
         # sliced_windowed_audio = sliced_audio * self.smoothing_window
 
 
         # compute FFT step
-        s = torch.stft(padded_audio, 
-                                n_fft=self.n_fft, 
-                                window=torch.hann_window(self.n_fft), 
-                                center=False, 
-                                return_complex=True)
+        s = torch.stft(audio, 
+                       n_fft=self.n_fft, 
+                       window=torch.hann_window(self.n_fft),
+                       center=True,
+                       pad_mode='constant', 
+                       return_complex=True)
         
         amplitude = torch.abs(s)
         power = amplitude ** 2

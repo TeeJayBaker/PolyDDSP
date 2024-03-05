@@ -43,7 +43,11 @@ class MonoTimbreEncoder(nn.Module):
             n_mfcc=n_mfcc,
             log_mels=True,
             melkwargs=dict(
-                n_fft=n_fft, hop_length=hop_length, n_mels=n_mels, f_min=20.0, f_max=8000.0,
+                n_fft=n_fft, 
+                hop_length=hop_length, 
+                n_mels=n_mels, 
+                f_min=20.0, 
+                f_max=8000.0
             )
         )
 
@@ -60,7 +64,6 @@ class MonoTimbreEncoder(nn.Module):
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         x = self.mfcc(x)
-        x = x[:, :, :-1]
         x = self.norm(x)
         x = self.permute(x)
         x, _ = self.gru(x)
@@ -93,7 +96,7 @@ class Encoder(nn.Module):
         timbre: Timbre features of size (batch, frames, z_units)
     """
     def __init__(self, sr: int = 22050,
-                 frame_length: int = 256,
+                 frame_length: int = 64,
                  use_z: bool = True,
                  z_units: int = 16,
                  n_fft: int = 2048,
@@ -125,21 +128,26 @@ class Encoder(nn.Module):
             
     
     def forward(self, x: torch.Tensor) -> dict[str, torch.Tensor]:
+        num_frames = int(np.ceil(x.shape[-1] / self.frame_length))
+        upsample = nn.Upsample(size = (num_frames), mode = 'linear')
         features = {}
         features['loudness'] = self.loudness_extractor(x)
         features['pitch'], features['amplitude'] = self.pitch_encoder(x)
+        features['pitch'] = upsample(features['pitch'])
+        features['amplitude'] = upsample(features['amplitude'])
         if self.use_z:
             features['timbre'] = self.timbre_encoder(x)
         return features
     
 import librosa
-audio = librosa.load("pitch_encoder/01_BN2-131-B_solo_mic.wav", sr=22050, duration=1)[0]
+audio = librosa.load("pitch_encoder/01_BN2-131-B_solo_mic.wav", sr=22050, duration=10)[0]
 
 print(audio.shape)
 audio = torch.tensor(audio).unsqueeze(0).to('cpu')
 model = Encoder()
 output = model(audio)
-print(output['pitch'].shape)
-print(output['amplitude'].shape)
-print(output['loudness'].shape)
-print(output['timbre'].shape)
+print('Pitch: ', output['pitch'].shape)
+print('Amplitude: ', output['amplitude'].shape)
+print('Loudness: ', output['loudness'].shape)
+print('Timbre: ', output['timbre'].shape)
+    
