@@ -73,10 +73,8 @@ class LoudnessExtractor(nn.Module):
         """
 
         # padded_audio = F.pad(audio, (self.n_fft // 2, self.n_fft // 2))
-        padded_audio = audio
         # sliced_audio = padded_audio.unfold(1, self.n_fft, self.frame_length)
         # sliced_windowed_audio = sliced_audio * self.smoothing_window
-
 
         # compute FFT step
         s = torch.stft(audio, 
