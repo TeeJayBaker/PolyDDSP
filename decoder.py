@@ -69,7 +69,7 @@ class Decoder(nn.Module):
     Output: Dictionary of synthesiser parameters (pitches, harmonics, amplitude, noise)
         frequencies: Frequency features of size (batch, voices, frames)
         harmonics: Harmonics spectra (batch, voices, n_harmonics, frames)
-        amplitude: Amplitude envelope (batch, voices, frames)
+        amplitude: per voice amplitude envelope (batch, voices, frames)
         noise: Noise filter coefficients of size (batch, filter_coeff, frames)
     """
     
@@ -95,16 +95,10 @@ class Decoder(nn.Module):
         self.gru_units = gru_units
         self.bidirectional = bidirectional
         self.max_voices = max_voices
-        
 
-        # Pitch pipeline 
-        self.pitch_mlp_f0 = MLP(input_dim=1, hidden_dims=mlp_hidden_dims, layer_num=mlp_layer_num)
-        self.pitch_mlp_loudness = MLP(input_dim=1, hidden_dims=mlp_hidden_dims, layer_num=mlp_layer_num)
-        self.pitch_mlp_velocity = MLP(input_dim=1, hidden_dims=mlp_hidden_dims, layer_num=mlp_layer_num)
-
-        # Noise pipeline
-        self.noise_mlp_f0 = MLP(input_dim=1, hidden_dims=mlp_hidden_dims, layer_num=mlp_layer_num)
-        self.noise_mlp_velocity = MLP(input_dim=1, hidden_dims=mlp_hidden_dims, layer_num=mlp_layer_num)
+        self.f0_mlp = MLP(input_dim=1, hidden_dims=mlp_hidden_dims, layer_num=mlp_layer_num)
+        self.amplitude_mlp = MLP(input_dim=1, hidden_dims=mlp_hidden_dims, layer_num=mlp_layer_num)
+        self.loudness_mlp = MLP(input_dim=1, hidden_dims=mlp_hidden_dims, layer_num=mlp_layer_num)
 
         # Timbre pipeline
         if self.use_z:
@@ -113,28 +107,59 @@ class Decoder(nn.Module):
         else:  
             num_mlp = 3
         
-        self.pitch_gru = nn.GRU(input_size=mlp_hidden_dims * num_mlp, 
+        self.decoder_gru = nn.GRU(input_size=mlp_hidden_dims * num_mlp, 
                                 hidden_size=gru_units, 
                                 num_layers=1, 
                                 batch_first=True, 
                                 bidirectional=bidirectional)
         
-        self.pitch_mlp = MLP(input_dim=gru_units * 2 if bidirectional else gru_units,
+        self.decoder_mlp = MLP(input_dim=gru_units * 2 if bidirectional else gru_units,
                              hidden_dims=mlp_hidden_dims, 
                              layer_num=mlp_layer_num)
         
-        self.noise_gru = nn.GRU(input_size=mlp_hidden_dims * 2, 
-                                hidden_size=gru_units, 
-                                num_layers=1, 
-                                batch_first=True, 
-                                bidirectional=bidirectional)
-        
-        self.noise_mlp = MLP(input_dim=gru_units * 2 if bidirectional else gru_units,
-                             hidden_dims=mlp_hidden_dims, 
-                             layer_num=mlp_layer_num)
-        
-        self.dense_harmonic = nn.Linear(mlp_hidden_dims, n_harmonics)
-        self.dense_filter = nn.Linear(mlp_hidden_dims, n_freqs + 1)        
+        self.dense_harmonic = nn.Linear(mlp_hidden_dims, n_harmonics + 1)
+        self.dense_filter = nn.Linear(mlp_hidden_dims, n_freqs)        
 
     def forward(self, x: dict[str, torch.Tensor]) -> dict[str, torch.Tensor]:
-        raise NotImplementedError
+        pitch = x['pitches'].unsqueeze(-1)
+        amplitude = x['amplitude'].unsqueeze(-1)
+        loudness = x['loudness'].unsqueeze(-1)
+        timbre = x['timbre']
+
+        batch = pitch.shape[0]
+
+        pitch = self.f0_mlp(pitch).reshape(batch * self.max_voices, -1, self.mlp_hidden_dims)
+        amplitude = self.amplitude_mlp(amplitude).reshape(batch * self.max_voices, -1, self.mlp_hidden_dims)
+        loudness = self.loudness_mlp(loudness).repeat(self.max_voices,1, 1)
+
+        if self.use_z:
+            timbre = timbre.permute(0, 2, 1)
+            timbre = self.timbre_mlp(timbre)
+            timbre = timbre.repeat(self.max_voices, 1, 1)
+
+            latent = torch.cat([pitch, amplitude, loudness, timbre], dim=-1)
+        else:
+            latent = torch.cat([pitch, amplitude, loudness], dim=-1)
+
+        latent = self.decoder_gru(latent)[0]
+        latent = self.decoder_mlp(latent)
+
+        # need to reconstruct polyphony
+        latent = latent.reshape(batch, self.max_voices, -1, self.mlp_hidden_dims)
+        harm_amp = self.dense_harmonic(latent)
+
+        harm_out = harm_amp[..., 1:].softmax(dim=-1).permute(0, 1, 3, 2)
+        amp_out = modified_sigmoid(harm_amp[..., 0]).unsqueeze(-1)
+
+        noise = self.dense_filter(latent).softmax(dim=-1).permute(0, 1, 3, 2)
+
+
+        raise {'frequencies': x['pitches'], 'harmonics': harm_out, 'amplitude': amp_out, 'noise': noise}
+    
+@staticmethod
+def modified_sigmoid(a):
+    a = a.sigmoid()
+    a = a.pow(2.3026)  # log10
+    a = a.mul(2.0)
+    a.add_(1e-7)
+    return a
