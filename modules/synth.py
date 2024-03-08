@@ -364,3 +364,16 @@ class AdditiveSynth(nn.Module):
                                 sample_rate=sample_rate,
                                 use_angular_cumsum=use_angular_cumsum)
         return audio
+    
+    def forward(self, x: dict[str, torch.Tensor]) -> torch.Tensor:
+        n_samples = int(np.ceil(x['frequencies'].shape[1] / self.frame_length))
+
+        audio = self.harmonic_synthesis(frequencies = x['frequencies'], 
+                                        amplitudes = x['amplitudes'], 
+                                        harmonic_shifts = None, 
+                                        harmonic_distribution = x['harmonics'], 
+                                        n_samples = n_samples, 
+                                        sample_rate = self.sample_rate, 
+                                        amp_resample_method = self.amp_resample_method, 
+                                        use_angular_cumsum = self.use_angular_cumsum)
+        return audio

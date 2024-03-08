@@ -1,5 +1,5 @@
 """
-Encoder for the VAE architecture
+Encoder for the AE architecture
 """
 
 import torch
