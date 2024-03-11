@@ -121,7 +121,7 @@ class Decoder(nn.Module):
         self.dense_filter = nn.Linear(mlp_hidden_dims, n_freqs)        
 
     def forward(self, x: dict[str, torch.Tensor]) -> dict[str, torch.Tensor]:
-        pitch = x['pitches'].unsqueeze(-1)
+        pitch = x['pitch'].unsqueeze(-1)
         amplitude = x['amplitude'].unsqueeze(-1)
         loudness = x['loudness'].unsqueeze(-1)
         timbre = x['timbre']
@@ -154,7 +154,7 @@ class Decoder(nn.Module):
         noise = self.dense_filter(latent).softmax(dim=-1).permute(0, 1, 3, 2)
 
 
-        raise {'frequencies': x['pitches'], 'harmonics': harm_out, 'amplitude': amp_out, 'noise': noise}
+        raise {'frequencies': x['pitch'], 'harmonics': harm_out, 'amplitude': amp_out, 'noise': noise}
     
 @staticmethod
 def modified_sigmoid(a):
