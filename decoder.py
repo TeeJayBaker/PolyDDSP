@@ -36,10 +36,15 @@ class MLP(nn.Module):
         self.relu = getattr(nn, relu)()
 
         layers = []
-        for i in range(self.layer_num):
-            layers.append(nn.Linear(self.hidden_dims, self.hidden_dims))
-            layers.append(nn.LayerNorm(self.hidden_dims))
+        if layer_num > 0:
+            layers.append(nn.Linear(input_dim, hidden_dims))
+            layers.append(nn.LayerNorm(hidden_dims))
             layers.append(self.relu)
+        if layer_num > 1:
+            for i in range(layer_num - 1):
+                layers.append(nn.Linear(hidden_dims, hidden_dims))
+                layers.append(nn.LayerNorm(hidden_dims))
+                layers.append(self.relu)
 
         self.mlp = nn.Sequential(*layers)
 
@@ -118,7 +123,8 @@ class Decoder(nn.Module):
                              layer_num=mlp_layer_num)
         
         self.dense_harmonic = nn.Linear(mlp_hidden_dims, n_harmonics + 1)
-        self.dense_filter = nn.Linear(mlp_hidden_dims, n_freqs)        
+        self.dense_filter = nn.Linear(mlp_hidden_dims, n_freqs)    
+            
 
     def forward(self, x: dict[str, torch.Tensor]) -> dict[str, torch.Tensor]:
         pitch = x['pitch'].unsqueeze(-1)
@@ -149,14 +155,13 @@ class Decoder(nn.Module):
         harm_amp = self.dense_harmonic(latent)
 
         harm_out = harm_amp[..., 1:].softmax(dim=-1).permute(0, 1, 3, 2)
-        amp_out = modified_sigmoid(harm_amp[..., 0]).unsqueeze(-1)
+        amp_out = modified_sigmoid(harm_amp[..., 0])
 
         noise = self.dense_filter(latent).softmax(dim=-1).permute(0, 1, 3, 2)
 
 
-        raise {'frequencies': x['pitch'], 'harmonics': harm_out, 'amplitude': amp_out, 'noise': noise}
+        return {'pitch': x['pitch'], 'harmonics': harm_out, 'amplitude': amp_out, 'noise': noise}
     
-@staticmethod
 def modified_sigmoid(a):
     a = a.sigmoid()
     a = a.pow(2.3026)  # log10
