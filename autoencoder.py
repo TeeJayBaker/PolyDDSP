@@ -34,4 +34,7 @@ print(output['pitch'].shape)
 print(output['amplitude'].shape)
 print(output['harmonics'].shape)
 print(output['noise'].shape)
+synth = AdditiveSynth()
+audio = synth(output)
+print(audio.shape)
 

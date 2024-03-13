@@ -23,7 +23,7 @@ class AdditiveSynth(nn.Module):
     Output: Filtered noise audio (batch, samples)
     """
 
-    def __init__(self, sample_rate: int = 16000, 
+    def __init__(self, sample_rate: int = 22050, 
                  normalize_below_nyquist: bool = True,
                  amp_resample_method: str = 'window',
                  use_angular_cumsum: bool = False, 
@@ -366,10 +366,10 @@ class AdditiveSynth(nn.Module):
         return audio
     
     def forward(self, x: dict[str, torch.Tensor]) -> torch.Tensor:
-        n_samples = int(np.ceil(x['frequencies'].shape[1] / self.frame_length))
+        n_samples = int(np.ceil(x['pitch'].shape[1] * self.frame_length))
 
-        audio = self.harmonic_synthesis(frequencies = x['frequencies'], 
-                                        amplitudes = x['amplitudes'], 
+        audio = self.harmonic_synthesis(frequencies = x['pitch'], 
+                                        amplitudes = x['amplitude'], 
                                         harmonic_shifts = None, 
                                         harmonic_distribution = x['harmonics'], 
                                         n_samples = n_samples, 
