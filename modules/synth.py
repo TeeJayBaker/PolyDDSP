@@ -119,17 +119,17 @@ class AdditiveSynth(nn.Module):
         """Create integer multiples of the fundamental frequency.
 
         Args:
-            frequencies: Fundamental frequencies (Hz). Shape [batch_size, :, 1].
+            frequencies: Fundamental frequencies (Hz). Shape [batch_size, n_voices, n_frames].
             n_harmonics: Number of harmonics.
 
         Returns:
             harmonic_frequencies: Oscillator frequencies (Hz).
-            Shape [batch_size, :, n_harmonics].
+            Shape [batch_size, n_voices, n_frames, n_harmonics].
         """
-        frequencies = torch.FloatTensor(frequencies)
+        frequencies = torch.FloatTensor(frequencies).unsqueeze(-1)
 
         f_ratios = torch.linspace(1.0, float(n_harmonics), int(n_harmonics))
-        f_ratios = f_ratios[None, None, :]
+        f_ratios = f_ratios[None, None, None, :]
         harmonic_frequencies = frequencies * f_ratios
         return harmonic_frequencies
           
@@ -233,7 +233,16 @@ class AdditiveSynth(nn.Module):
         elif method == 'cubic':
             outputs = resize('bicubic')
         elif method == 'window':
+            # squash to 3d if 4d
+            if is_4d:
+                batch, channels, _, n_freqs = inputs.shape
+                inputs = inputs.permute(0, 3, 1, 2).reshape(batch * n_freqs, channels, -1)
+
             outputs = ops.upsample_with_windows(inputs, n_timesteps, add_endpoint)
+
+            # reconstruct 4d
+            if is_4d:
+                outputs = outputs.reshape(batch, n_freqs, channels, -1).permute(0, 2, 3, 1)
         else:
             raise ValueError('Method ({}) is invalid. Must be one of {}.'.format(
                 method, "['nearest', 'linear', 'cubic', 'window']"))
@@ -311,16 +320,16 @@ class AdditiveSynth(nn.Module):
         """Generate audio from frame-wise monophonic harmonic oscillator bank.
 
         Args:
-            frequencies: Frame-wise fundamental frequency in Hz. Shape [batch_size,
-            n_frames, 1].
-            amplitudes: Frame-wise oscillator peak amplitude. Shape [batch_size,
-            n_frames, 1].
+            frequencies: Frame-wise fundamental frequency in Hz. Shape [batch_size, n_voices
+            n_frames].
+            amplitudes: Frame-wise oscillator peak amplitude. Shape [batch_size, n_voices
+            n_frames].
             harmonic_shifts: Harmonic frequency variations (Hz), zero-centered. Total
             frequency of a harmonic is equal to (frequencies * harmonic_number * (1 +
-            harmonic_shifts)). Shape [batch_size, n_frames, n_harmonics].
+            harmonic_shifts)). Shape [batch_size, n_voices, n_harmonics, n_frames].
             harmonic_distribution: Harmonic amplitude variations, ranged zero to one.
             Total amplitude of a harmonic is equal to (amplitudes *
-            harmonic_distribution). Shape [batch_size, n_frames, n_harmonics].
+            harmonic_distribution). Shape [batch_size, n_voices, n_harmonics, n_frames].
             n_samples: Total length of output audio. Interpolates and crops to this.
             sample_rate: Sample rate.
             amp_resample_method: Mode with which to resample amplitude envelopes.
@@ -328,13 +337,13 @@ class AdditiveSynth(nn.Module):
             instead of tf.cumsum. More accurate for inference.
 
         Returns:
-            audio: Output audio. Shape [batch_size, n_samples, 1]
+            audio: Output audio. Shape [batch_size, n_samples]
         """
         frequencies = torch.FloatTensor(frequencies)
         amplitudes = torch.FloatTensor(amplitudes)
 
         if harmonic_distribution is not None:
-            harmonic_distribution = torch.FloatTensor(harmonic_distribution)
+            harmonic_distribution = torch.FloatTensor(harmonic_distribution).permute(0, 1, 3, 2)
             n_harmonics = int(harmonic_distribution.shape[-1])
         elif harmonic_shifts is not None:
             harmonic_shifts = torch.FloatTensor(harmonic_shifts)
@@ -342,22 +351,29 @@ class AdditiveSynth(nn.Module):
         else:
             n_harmonics = 1
 
-        # Create harmonic frequencies [batch_size, n_frames, n_harmonics].
+        # Create harmonic frequencies [batch_size, n_voices, n_frames, n_harmonics].
         harmonic_frequencies = self.get_harmonic_frequencies(frequencies, n_harmonics)
         if harmonic_shifts is not None:
             harmonic_frequencies *= (1.0 + harmonic_shifts)
 
-        # Create harmonic amplitudes [batch_size, n_frames, n_harmonics].
+        # Create harmonic amplitudes [batch_size, n_voices, n_frames, n_harmonics].
         if harmonic_distribution is not None:
-            harmonic_amplitudes = amplitudes * harmonic_distribution
+            harmonic_amplitudes = amplitudes.unsqueeze(-1) * harmonic_distribution
         else:
-            harmonic_amplitudes = amplitudes
+            harmonic_amplitudes = amplitudes.unsqueeze(-1)
 
         # Create sample-wise envelopes.
         frequency_envelopes = self.resample(harmonic_frequencies, n_samples)  # cycles/sec
         amplitude_envelopes = self.resample(harmonic_amplitudes, n_samples,
                                         method=amp_resample_method)
 
+        #reshape voices into harmonics
+        frequency_envelopes = frequency_envelopes.permute(0, 2, 1, 3).reshape(
+            frequency_envelopes.shape[0], frequency_envelopes.shape[2], -1
+            )
+        amplitude_envelopes = amplitude_envelopes.permute(0, 2, 1, 3).reshape(
+            amplitude_envelopes.shape[0], amplitude_envelopes.shape[2], -1
+            )
         # Synthesize from harmonics [batch_size, n_samples].
         audio = self.oscillator_bank(frequency_envelopes,
                                 amplitude_envelopes,
@@ -366,7 +382,7 @@ class AdditiveSynth(nn.Module):
         return audio
     
     def forward(self, x: dict[str, torch.Tensor]) -> torch.Tensor:
-        n_samples = int(np.ceil(x['pitch'].shape[1] * self.frame_length))
+        n_samples = int(np.ceil(x['pitch'].shape[-1] * self.frame_length))
 
         audio = self.harmonic_synthesis(frequencies = x['pitch'], 
                                         amplitudes = x['amplitude'], 

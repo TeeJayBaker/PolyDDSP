@@ -73,7 +73,7 @@ class Decoder(nn.Module):
 
     Output: Dictionary of synthesiser parameters (pitches, harmonics, amplitude, noise)
         frequencies: Frequency features of size (batch, voices, frames)
-        harmonics: Harmonics spectra (batch, voices, n_harmonics, frames)
+        harmonics: Harmonics spectra (batch, voices, harmonics, frames)
         amplitude: per voice amplitude envelope (batch, voices, frames)
         noise: Noise filter coefficients of size (batch, filter_coeff, frames)
     """
