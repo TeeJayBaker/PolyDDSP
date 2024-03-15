@@ -29,6 +29,7 @@ def exp_sigmoid(x: torch.Tensor,
         A tensor with pointwise nonlinearity applied.
     """
     x = x.float()
+    exponent = torch.tensor(exponent, dtype=x.dtype)
     return max_value * torch.sigmoid(x) ** torch.log(exponent) + threshold
 
 def get_fft_size(frame_size: int, 

@@ -163,7 +163,8 @@ class FilteredNoise(nn.Module):
         Compute LTI-FVR filter banks, and calculate time varying filtered noise via overlap-add.
         """
 
-        batch_size, num_frames, num_banks = filter_coeff.shape
+        batch_size, _, num_banks, num_frames = filter_coeff.shape
+        filter_coeff = filter_coeff.mean(dim = 1).permute(0, 2, 1)
         magnitudes = ops.exp_sigmoid(filter_coeff + self.initial_bias)
 
         noise = torch.FloatTensor(batch_size, num_frames * self.frame_length).uniform_(-1, 1)

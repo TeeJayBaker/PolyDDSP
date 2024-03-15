@@ -26,6 +26,7 @@ audio = librosa.load("pitch_encoder/01_BN2-131-B_solo_mic.wav", sr=22050, durati
 
 print(audio.shape)
 audio = torch.tensor(audio).unsqueeze(0).to('cpu')
+
 encoder = Encoder()
 decoder = Decoder()
 parts = encoder(audio)
@@ -34,7 +35,11 @@ print(output['pitch'].shape)
 print(output['amplitude'].shape)
 print(output['harmonics'].shape)
 print(output['noise'].shape)
+
 synth = AdditiveSynth()
 audio = synth(output)
 print(audio.shape)
 
+noise = FilteredNoise()
+noise = noise(output['noise'])
+print(noise.shape)
