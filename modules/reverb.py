@@ -55,7 +55,7 @@ class Reverb(nn.Module):
         if len(impulse_response.shape) == 3:
             impulse_response = impulse_response.squeeze(1)
 
-        dry_mask = torch.zeros([int(impulse_response.shape[0]), 1], dtype = torch.FloatTensor)
+        dry_mask = torch.zeros((int(impulse_response.shape[0]), 1))
         return torch.cat([dry_mask, impulse_response[:, 1:]], dim=1)
     
     def _match_dimensions(self, 
@@ -85,5 +85,6 @@ class Reverb(nn.Module):
             if self.impulse_response is None:
                 raise ValueError('Must provide "ir" tensor if Reverb trainable=False.')
 
+        impulse_response = self._mask_dry(impulse_response)
         wet = ops.fft_convolve(audio, impulse_response, padding='same', delay_compensation=0)
         return (wet + audio) if self.add_dry else wet

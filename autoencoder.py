@@ -43,3 +43,8 @@ print(audio.shape)
 noise = FilteredNoise()
 noise = noise(output['noise'])
 print(noise.shape)
+
+reverb = Reverb()
+print((audio+noise).shape)
+audio = reverb(audio + noise)
+print(audio.shape)
