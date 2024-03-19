@@ -243,7 +243,10 @@ def fft_convolve(audio: torch.Tensor,
 
     # Take the IFFT to resynthesize audio.
     audio_frames_out = torch.fft.irfft(audio_ir_fft)
-    audio_out = overlap_and_add(audio_frames_out, hop_size)
+    if audio_frames_out.shape[1] > 1:
+        audio_out = overlap_and_add(audio_frames_out, hop_size)
+    else:
+        audio_out = audio_frames_out.squeeze(1)
 
     # Crop and shift the output audio.
     return crop_and_compensate_delay(audio_out, audio_size, ir_size,
