@@ -87,7 +87,8 @@ class Decoder(nn.Module):
                  n_freqs: int = 65,
                  gru_units: int = 512,
                  bidirectional: bool = True,
-                 max_voices: int = 10):
+                 max_voices: int = 10,
+                 device: str = 'cpu'):
         
         super(Decoder, self).__init__()
 
