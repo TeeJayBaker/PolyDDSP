@@ -26,7 +26,7 @@ class AudioDataset(Dataset):
         self.sr = sr
         self.duration = duration
         self.random = random
-        
+
     def __len__(self):
         return len(self.paths)
 
@@ -37,7 +37,7 @@ class AudioDataset(Dataset):
         audio = torchaudio.transforms.Resample(orig_freq=old_sr, 
                                                new_freq=self.sr)(audio)
         if self.random:
-            start = self.rng.integers(0, audio.shape[-1] - self.duration * self.sr)
+            start = np.random.randint(0, audio.shape[-1] - int(self.duration * self.sr))
             audio = audio[:, start:start + int(self.duration * self.sr)]
         else: 
             audio = audio[:, :int(self.duration * self.sr)]

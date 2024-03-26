@@ -387,10 +387,12 @@ def get_pitch_bends(contours: torch.Tensor,
     freq_gaussian = torch.signal.windows.gaussian(window_length, std=5)
 
     batch_idx, freq, start_idx, end_idx = note_event
+    print(freq)
     freq_idx = midi_pitch_to_contour_bins(freq)
+    print(freq_idx)
     freq_start_idx = max(0, freq_idx - n_bins_tolerance)
     freq_end_idx = min(n_freq_bins_contour, freq_idx + n_bins_tolerance + 1)
-
+    
     contours_trans = contours.permute(0, 2, 1)
 
     pitch_bend_submatrix = (

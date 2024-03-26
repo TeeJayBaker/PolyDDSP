@@ -102,12 +102,12 @@ class AutoEncoder(nn.Module):
         return audio, noise, reverbed
     
 
-import librosa
-audio = librosa.load("pitch_encoder/01_BN2-131-B_solo_mic.wav", sr=22050, duration=10)[0]
+# import librosa
+# audio = librosa.load("pitch_encoder/01_BN2-131-B_solo_mic.wav", sr=22050, duration=10)[0]
 
-print(audio.shape)
-audio = torch.tensor(audio).unsqueeze(0).to('cpu')
+# print(audio.shape)
+# audio = torch.tensor(audio).unsqueeze(0).to('cpu')
 
-model = AutoEncoder()
-audio, noise, reverbed = model(audio)
-print(audio.shape, noise.shape, reverbed.shape)
+# model = AutoEncoder()
+# audio, noise, reverbed = model(audio)
+# print(audio.shape, noise.shape, reverbed.shape)
