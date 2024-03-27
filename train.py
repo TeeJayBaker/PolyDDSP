@@ -1,6 +1,7 @@
 import torch
 import torch.nn as nn
 import torch.optim as optim
+import torchaudio
 from autoencoder import AutoEncoder
 from modules.losses import SpectralLoss
 from dataset import AudioDataset
@@ -49,6 +50,20 @@ dataset = AudioDataset(data_list, sr=22050, duration=5)
 train_dataloader = DataLoader(dataset, batch_size=32, shuffle=True)  # Your training dataloader
 num_epochs = 100
 
+test_audio, _ = torchaudio.load("pitch_encoder/01_BN2-131-B_solo_mic.wav", normalize=True)
+test_audio = test_audio[:, :22050*3]
+test_audio = test_audio.to(device)
+
 for epoch in range(num_epochs):
     loss = train(model, train_dataloader, optimizer, criterion, device)
     print(f"Epoch {epoch+1}/{num_epochs}, Loss: {loss:.4f}")
+
+    # Save the model
+    torch.save(model.state_dict(), "model.pth")
+    
+    # Every epoch run a test audio through the model
+    audio, noise, reverbed = model(test_audio)
+    print(f"Test audio shape: {audio.shape}")
+
+    # Save the test audio
+    torchaudio.save(f"test_audio_epoch_{epoch}.wav", reverbed, sample_rate = 22050)
