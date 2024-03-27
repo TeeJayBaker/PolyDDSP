@@ -373,7 +373,7 @@ def get_pitch_bends(contours: torch.Tensor,
 
     Args:
         contour: The contour predictions (batch, freq_bins, time_frames)
-        note_event: The note event predictions list(batch, freq, start_idx, end_idx)
+        note_event: The note event predictions list(batch, freq_midi, start_idx, end_idx)
 
     Returns:
         The pitch bend predictions (time_frames)
@@ -386,13 +386,11 @@ def get_pitch_bends(contours: torch.Tensor,
     window_length = 2 * n_bins_tolerance + 1
     freq_gaussian = torch.signal.windows.gaussian(window_length, std=5)
 
-    batch_idx, freq, start_idx, end_idx = note_event
-    print(freq)
-    freq_idx = midi_pitch_to_contour_bins(freq)
-    print(freq_idx)
+    batch_idx, freq_midi, start_idx, end_idx = note_event
+    freq_idx = midi_pitch_to_contour_bins(freq_midi)
     freq_start_idx = max(0, freq_idx - n_bins_tolerance)
     freq_end_idx = min(n_freq_bins_contour, freq_idx + n_bins_tolerance + 1)
-    
+
     contours_trans = contours.permute(0, 2, 1)
 
     pitch_bend_submatrix = (
@@ -405,7 +403,7 @@ def get_pitch_bends(contours: torch.Tensor,
     )
 
     pb_shift = n_bins_tolerance - max([0, n_bins_tolerance - freq_idx])
-    bends = (torch.argmax(pitch_bend_submatrix, axis=1) - pb_shift) * 0.25 + freq
+    bends = (torch.argmax(pitch_bend_submatrix, axis=1) - pb_shift) * 0.25 + freq_midi
             
     return bends
 
@@ -492,21 +490,21 @@ def output_to_notes_polyphonic(frames: torch.Tensor,
         if freq_idx > 0:
             remaining_energy[batch_idx, freq_idx - 1, note_start_idx:i] = 0
 
-        bends = get_pitch_bends(contours, [batch_idx, freq_idx, note_start_idx, i], 25)
+        bends = get_pitch_bends(contours, [batch_idx, freq_idx + MIDI_OFFSET, note_start_idx, i], 25)
 
         # need to assign notes to voices, first in first out.
         # keep track of voice allocation order
         v = list(range(n_voices))
         for j in range(n_voices):
             if notes[batch_idx, v[j], note_start_idx] == 0:
-                notes[batch_idx, v[j], note_start_idx:i] = utils.tensor_midi_to_hz(bends + MIDI_OFFSET)
+                notes[batch_idx, v[j], note_start_idx:i] = utils.tensor_midi_to_hz(bends)
                 amplitude[batch_idx, v[j], note_start_idx:i] = frames[batch_idx, freq_idx, note_start_idx:i]
                 v.insert(0, v.pop(j))
                 break
             #if no free voice set the lowest amplitude voice to the new note
             if j == n_voices - 1:
                 min_idx = torch.argmin(torch.mean(amplitude[batch_idx, :, note_start_idx:i], dim=1))
-                notes[batch_idx, min_idx, note_start_idx:i] = utils.tensor_midi_to_hz(bends + MIDI_OFFSET)
+                notes[batch_idx, min_idx, note_start_idx:i] = utils.tensor_midi_to_hz(bends)
                 amplitude[batch_idx, min_idx, note_start_idx:i] = frames[batch_idx, freq_idx, note_start_idx:i]
                 v.insert(0, v.pop(v.index(min_idx)))
 
@@ -561,13 +559,13 @@ def output_to_notes_polyphonic(frames: torch.Tensor,
                 # note is too short, skip it
                 continue
             
-            bends = get_pitch_bends(contours, [batch, freq_idx, i_start, i_end], 25)
+            bends = get_pitch_bends(contours, [batch, freq_idx + MIDI_OFFSET, i_start, i_end], 25)
 
             # if there is a gap in available voices, add the note
             v = list(range(n_voices))
             for j in range(n_voices):
                 if notes[batch, v[j], i_start:i_end].sum == 0:
-                    notes[batch, v[j], i_start:i_end] = utils.tensor_midi_to_hz(bends + MIDI_OFFSET)
+                    notes[batch, v[j], i_start:i_end] = utils.tensor_midi_to_hz(bends)
                     amplitude[batch, v[j], i_start:i_end] = frames[batch, freq_idx, i_start:i_end]
 
     return notes, amplitude
