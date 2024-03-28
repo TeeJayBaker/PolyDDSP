@@ -139,15 +139,27 @@ class Encoder(nn.Module):
             features['timbre'] = self.timbre_encoder(x)
         return features
     
-# import librosa
-# audio = librosa.load("pitch_encoder/01_BN2-131-B_solo_mic.wav", sr=22050, duration=10)[0]
+import librosa
+audio = librosa.load("pitch_encoder/01_BN2-131-B_solo_mic.wav", sr=22050, duration=10)[0]
 
-# print(audio.shape)
-# audio = torch.tensor(audio).unsqueeze(0).to('cpu')
-# model = Encoder()
-# output = model(audio)
-# print('Pitch: ', output['pitch'].shape)
-# print('Amplitude: ', output['amplitude'].shape)
-# print('Loudness: ', output['loudness'].shape)
-# print('Timbre: ', output['timbre'].shape)
+print(audio.shape)
+audio = torch.tensor(audio).unsqueeze(0).to('cpu')
+model = Encoder()
+output = model(audio)
+print('Pitch: ', output['pitch'].shape)
+print('Amplitude: ', output['amplitude'].shape)
+print('Loudness: ', output['loudness'].shape)
+print('Timbre: ', output['timbre'].shape)
     
+# print a plot of pitch and loudness on the same x axis
+import matplotlib.pyplot as plt
+import numpy as np
+
+plt.figure(figsize=(10, 6))
+# log scale pitch from frequency to midi
+plt.plot(np.arange(output['pitch'].shape[-1]), 12 * np.log2(output['pitch'].squeeze().numpy().T))
+# loudness
+plt.plot(np.arange(output['loudness'].shape[-1]), output['loudness'].squeeze().numpy()+100)
+plt.legend(['Pitch', 'Loudness'])
+
+plt.show()
