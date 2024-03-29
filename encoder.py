@@ -159,7 +159,7 @@ plt.figure(figsize=(10, 6))
 # log scale pitch from frequency to midi
 plt.plot(np.arange(output['pitch'].shape[-1]), 12 * np.log2(output['pitch'].squeeze().numpy().T))
 # loudness
-plt.plot(np.arange(output['loudness'].shape[-1]), output['loudness'].squeeze().numpy()+100)
+plt.plot(np.arange(output['loudness'].shape[-1]), output['loudness'].squeeze().numpy()+150)
 plt.legend(['Pitch', 'Loudness'])
 
 plt.show()
