@@ -15,11 +15,20 @@ class AdditiveSynth(nn.Module):
     Additive Harmonic synthesiser
 
     Args:
+        sample_rate: sample rate of audio
+        normalize_below_nyquist: whether to normalize above nyquist
+        amp_resample_method: method of resampling amplitude envelopes, 
+            'window', 'linear', 'cubic' and 'nearest'
+        use_angular_cumsum: whether to use angular cumulative sum
         frame_length: length of each frame window
         attenuate_gain: gain multiplier applied at end of generation
         device: Specify whether computed on cpu, cuda or mps
 
-    Input: Synthesiser parameters coefficients of size (batch, frames, banks)
+    Input: Synthesiser parameters coefficients in a dictionary
+        frequencies: Frequency features of size (batch, voices, frames)
+        harmonics: Harmonics spectra (batch, voices, harmonics, frames)
+        amplitude: per voice amplitude envelope (batch, voices, frames)
+        noise: Noise filter coefficients of size (batch, filter_coeff, frames)
     Output: Filtered noise audio (batch, samples)
     """
 
@@ -223,7 +232,8 @@ class AdditiveSynth(nn.Module):
             """Closure around torch.nn.Upsample."""
             # Image resize needs 4-D input. Add/remove extra axis if not 4-D.
             outputs = inputs[:, :,  :, None] if not is_4d else inputs
-            outputs = nn.Upsample(size=[n_timesteps, outputs.shape[3]], mode=method, align_corners=not add_endpoint)(outputs)
+            outputs = nn.Upsample(size=[n_timesteps, outputs.shape[3]], 
+                                  mode=method, align_corners=not add_endpoint)(outputs)
             return outputs[:, :, :, 0] if not is_4d else outputs
 
         if method == 'nearest':
