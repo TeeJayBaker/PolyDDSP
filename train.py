@@ -7,12 +7,15 @@ from modules.losses import SpectralLoss
 from dataset import AudioDataset
 from torch.utils.data import DataLoader
 import glob
+import wandb
 
 # Set device
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
 # Initialize the AutoEncoder model
 model = AutoEncoder().to(device)
+
+wandb.watch(model)
 
 # Define the optimizer and loss function
 optimizer = optim.Adam(model.parameters(), lr=0.001)
@@ -58,8 +61,8 @@ for epoch in range(num_epochs):
     loss = train(model, train_dataloader, optimizer, criterion, device)
     print(f"Epoch {epoch+1}/{num_epochs}, Loss: {loss:.4f}")
 
-    # Save the model
-    torch.save(model.state_dict(), "model.pth")
+    # Save the model separately after each epoch
+    torch.save(model.state_dict(), f"model_epoch_{epoch}.pt")
     
     # Every epoch run a test audio through the model
     audio, noise, reverbed = model(test_audio)
