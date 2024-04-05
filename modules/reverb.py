@@ -37,7 +37,6 @@ class Reverb(nn.Module):
         self.trainable = trainable
         self.reverb_length = reverb_length
         self.add_dry = add_dry
-        self.device = device
 
         if self.trainable:
             self.impulse_response = nn.Parameter(
@@ -47,6 +46,8 @@ class Reverb(nn.Module):
             if impulse_response is None:
                 raise ValueError('Must provide "ir" tensor if Reverb trainable=False.')
             self.impulse_response = impulse_response
+
+        self.to(device)
 
     def _mask_dry(self, impulse_response: torch.Tensor) -> torch.Tensor:
         """

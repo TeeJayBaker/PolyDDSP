@@ -35,8 +35,8 @@ class FilteredNoise(nn.Module):
         self.initial_bias = initial_bias
         self.window_size = window_size
         self.frame_length = frame_length
-        self.device = device
         self.attenuate_gain = attenuate_gain
+        self.to(device)
 
     def apply_window_to_impulse_response(
         self, impulse_response: torch.Tensor, window_size: int = 0, causal: bool = False

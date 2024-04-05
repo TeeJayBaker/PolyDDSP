@@ -49,7 +49,7 @@ class AdditiveSynth(nn.Module):
         self.use_angular_cumsum = use_angular_cumsum
         self.frame_length = frame_length
         self.attenuate_gain = attenuate_gain
-        self.device = device
+        self.to(device)
 
     def angular_cumsum(
         self, angular_frequency: torch.Tensor, chunk_size: int = 1000

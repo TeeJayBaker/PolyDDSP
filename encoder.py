@@ -4,7 +4,6 @@ Encoder for the AE architecture
 
 import torch
 import torch.nn as nn
-import torch.nn.functional as F
 import torchaudio
 import numpy as np
 
@@ -40,6 +39,7 @@ class MonoTimbreEncoder(nn.Module):
         n_mfcc: int = 30,
         gru_units: int = 512,
         bidirectional: bool = True,
+        device: str = "cpu",
     ):
         super(MonoTimbreEncoder, self).__init__()
 
@@ -66,6 +66,8 @@ class MonoTimbreEncoder(nn.Module):
             bidirectional=bidirectional,
         )
         self.dense = nn.Linear(gru_units * 2 if bidirectional else gru_units, z_units)
+
+        self.to(device)
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         x = self.mfcc(x)
@@ -119,11 +121,10 @@ class Encoder(nn.Module):
 
         self.sr = sr
         self.frame_length = frame_length
-        self.device = device
+        self.use_z = use_z
 
         self.loudness_extractor = LoudnessExtractor(sr, frame_length, device=device)
         self.pitch_encoder = PitchEncoder(device=device)
-        self.use_z = use_z
 
         if self.use_z:
             self.timbre_encoder = MonoTimbreEncoder(
@@ -136,6 +137,8 @@ class Encoder(nn.Module):
                 gru_units,
                 bidirectional,
             )
+
+        self.to(device)
 
     def forward(self, x: torch.Tensor) -> dict[str, torch.Tensor]:
         num_frames = int(np.ceil(x.shape[-1] / self.frame_length))

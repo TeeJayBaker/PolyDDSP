@@ -23,7 +23,12 @@ class MLP(nn.Module):
     """
 
     def __init__(
-        self, input_dim: int, hidden_dims: int, layer_num: int, relu: str = "ReLU"
+        self,
+        input_dim: int,
+        hidden_dims: int,
+        layer_num: int,
+        relu: str = "ReLU",
+        device: str = "cpu",
     ):
         super(MLP, self).__init__()
 
@@ -44,6 +49,8 @@ class MLP(nn.Module):
                 layers.append(self.relu)
 
         self.mlp = nn.Sequential(*layers)
+
+        self.to(device)
 
     def forward(self, x):
         return self.mlp(x)
@@ -136,6 +143,8 @@ class Decoder(nn.Module):
 
         self.dense_harmonic = nn.Linear(mlp_hidden_dims, n_harmonics + 1)
         self.dense_filter = nn.Linear(mlp_hidden_dims, n_freqs)
+
+        self.to(device)
 
     def forward(self, x: dict[str, torch.Tensor]) -> dict[str, torch.Tensor]:
         pitch = x["pitch"].unsqueeze(-1)
