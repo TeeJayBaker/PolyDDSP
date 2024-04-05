@@ -4,9 +4,8 @@ Filtered noise synthesiser
 
 import torch
 import torch.nn as nn
-import torch.nn.functional as F
-import numpy as np
 import modules.operations as ops
+
 
 class FilteredNoise(nn.Module):
     """
@@ -22,25 +21,26 @@ class FilteredNoise(nn.Module):
     Input: Filter coefficients of size (batch, frames, banks)
     Output: Filtered noise audio (batch, samples)
     """
-    def __init__(self, 
-                 frame_length: int = 64, 
-                 attenuate_gain: float = 1e-2, 
-                 initial_bias: float = -5.0, 
-                 window_size: int = 257, 
-                 device: str = 'mps'):
-        
+
+    def __init__(
+        self,
+        frame_length: int = 64,
+        attenuate_gain: float = 1e-2,
+        initial_bias: float = -5.0,
+        window_size: int = 257,
+        device: str = "mps",
+    ):
         super(FilteredNoise, self).__init__()
-        
+
         self.initial_bias = initial_bias
         self.window_size = window_size
         self.frame_length = frame_length
         self.device = device
         self.attenuate_gain = attenuate_gain
-    
-    def apply_window_to_impulse_response(self, 
-                                         impulse_response: torch.Tensor, 
-                                         window_size: int = 0, 
-                                         causal: bool = False) -> torch.Tensor:
+
+    def apply_window_to_impulse_response(
+        self, impulse_response: torch.Tensor, window_size: int = 0, causal: bool = False
+    ) -> torch.Tensor:
         """
         Apply window to impulse response and put it in causal form.
 
@@ -58,7 +58,7 @@ class FilteredNoise(nn.Module):
 
         # if IR is causal, convert to zero-phase
         if causal:
-            impulse_response = torch.fft.fftshift(impulse_response, dim = -1)
+            impulse_response = torch.fft.fftshift(impulse_response, dim=-1)
 
         # Get a window for better time/frequency resolution than rectangular.
         # Window defaults to IR size, cannot be bigger.
@@ -71,11 +71,11 @@ class FilteredNoise(nn.Module):
         padding = ir_size - window_size
         if padding > 0:
             half_idx = (window_size + 1) // 2
-            window = torch.cat((window[half_idx:], 
-                                torch.zeros(padding), 
-                                window[:half_idx]), dim = 0)
+            window = torch.cat(
+                (window[half_idx:], torch.zeros(padding), window[:half_idx]), dim=0
+            )
         else:
-            window = torch.fft.fftshift(window, dim = -1)
+            window = torch.fft.fftshift(window, dim=-1)
 
         # Apply the window, to get new IR (both in zero-phase form).
         window = torch.broadcast_to(window, impulse_response.shape)
@@ -85,17 +85,21 @@ class FilteredNoise(nn.Module):
         if padding > 0:
             first_half_start = (ir_size - (half_idx - 1)) + 1
             second_half_end = half_idx + 1
-            impulse_response = torch.cat([impulse_response[..., first_half_start:], 
-                                          impulse_response[..., :second_half_end]],
-                                          axis=-1)
+            impulse_response = torch.cat(
+                [
+                    impulse_response[..., first_half_start:],
+                    impulse_response[..., :second_half_end],
+                ],
+                axis=-1,
+            )
         else:
-            impulse_response = torch.fft.fftshift(impulse_response, dim = -1)
+            impulse_response = torch.fft.fftshift(impulse_response, dim=-1)
 
         return impulse_response
-    
-    def frequency_impulse_response(self, 
-                                   magnitudes: torch.Tensor, 
-                                   window_size: int = 0) -> torch.Tensor:
+
+    def frequency_impulse_response(
+        self, magnitudes: torch.Tensor, window_size: int = 0
+    ) -> torch.Tensor:
         """Get windowed impulse responses using the frequency sampling method.
 
         Follows the approach in:
@@ -123,16 +127,19 @@ class FilteredNoise(nn.Module):
         impulse_response = torch.fft.irfft(magnitudes)
 
         # Window and put in causal form.
-        impulse_response = self.apply_window_to_impulse_response(impulse_response,
-                                                            window_size)
+        impulse_response = self.apply_window_to_impulse_response(
+            impulse_response, window_size
+        )
 
         return impulse_response
-        
-    def frequency_filter(self, 
-                         audio: torch.Tensor, 
-                         magnitudes: torch.Tensor, 
-                         window_size: int = 0, 
-                         padding: str = 'same') -> torch.Tensor:
+
+    def frequency_filter(
+        self,
+        audio: torch.Tensor,
+        magnitudes: torch.Tensor,
+        window_size: int = 0,
+        padding: str = "same",
+    ) -> torch.Tensor:
         """Filter audio with a finite impulse response filter.
 
         Args:
@@ -154,8 +161,9 @@ class FilteredNoise(nn.Module):
                 [batch, audio_timesteps + window_size - 1] ('valid' padding) or shape
                 [batch, audio_timesteps] ('same' padding).
         """
-        impulse_response = self.frequency_impulse_response(magnitudes,
-                                                        window_size=window_size)
+        impulse_response = self.frequency_impulse_response(
+            magnitudes, window_size=window_size
+        )
         return ops.fft_convolve(audio, impulse_response, padding=padding)
 
     def forward(self, filter_coeff: torch.Tensor) -> torch.Tensor:
@@ -164,11 +172,13 @@ class FilteredNoise(nn.Module):
         """
 
         batch_size, _, num_banks, num_frames = filter_coeff.shape
-        filter_coeff = filter_coeff.mean(dim = 1).permute(0, 2, 1)
+        filter_coeff = filter_coeff.mean(dim=1).permute(0, 2, 1)
         magnitudes = ops.exp_sigmoid(filter_coeff + self.initial_bias)
 
-        noise = torch.FloatTensor(batch_size, num_frames * self.frame_length).uniform_(-1, 1)
-        return self.frequency_filter(noise, magnitudes, window_size = self.window_size) * self.attenuate_gain
-
-
-
+        noise = torch.FloatTensor(batch_size, num_frames * self.frame_length).uniform_(
+            -1, 1
+        )
+        return (
+            self.frequency_filter(noise, magnitudes, window_size=self.window_size)
+            * self.attenuate_gain
+        )

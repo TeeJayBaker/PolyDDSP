@@ -1,5 +1,4 @@
 import torch
-import torch.nn as nn
 import torch.optim as optim
 import torchaudio
 from autoencoder import AutoEncoder
@@ -20,6 +19,7 @@ wandb.watch(model)
 # Define the optimizer and loss function
 optimizer = optim.Adam(model.parameters(), lr=0.001)
 criterion = SpectralLoss()
+
 
 # Define your training loop
 def train(model, dataloader, optimizer, criterion, device):
@@ -47,14 +47,19 @@ def train(model, dataloader, optimizer, criterion, device):
 
     return running_loss / len(dataloader)
 
+
 # Example usage
 data_list = glob.glob("pitch_encoder/*.wav")
 dataset = AudioDataset(data_list, sr=22050, duration=5)
-train_dataloader = DataLoader(dataset, batch_size=32, shuffle=True)  # Your training dataloader
+train_dataloader = DataLoader(
+    dataset, batch_size=32, shuffle=True
+)  # Your training dataloader
 num_epochs = 100
 
-test_audio, _ = torchaudio.load("pitch_encoder/01_BN2-131-B_solo_mic.wav", normalize=True)
-test_audio = test_audio[:, :22050*3]
+test_audio, _ = torchaudio.load(
+    "pitch_encoder/01_BN2-131-B_solo_mic.wav", normalize=True
+)
+test_audio = test_audio[:, : 22050 * 3]
 test_audio = test_audio.to(device)
 
 for epoch in range(num_epochs):
@@ -63,10 +68,10 @@ for epoch in range(num_epochs):
 
     # Save the model separately after each epoch
     torch.save(model.state_dict(), f"model_epoch_{epoch}.pt")
-    
+
     # Every epoch run a test audio through the model
     audio, noise, reverbed = model(test_audio)
     print(f"Test audio shape: {audio.shape}")
 
     # Save the test audio
-    torchaudio.save(f"test_audio_epoch_{epoch}.wav", reverbed, sample_rate = 22050)
+    torchaudio.save(f"test_audio_epoch_{epoch}.wav", reverbed, sample_rate=22050)

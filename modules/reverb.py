@@ -6,6 +6,7 @@ import torch
 import torch.nn as nn
 import modules.operations as ops
 
+
 class Reverb(nn.Module):
     """
     Finite Impulse Response (FIR) reverb module
@@ -22,13 +23,15 @@ class Reverb(nn.Module):
     Input: Audio input of size (batch, samples)
     Output: Reverberated audio of size (batch, samples)
     """
-    def __init__(self,
-                trainable: bool = True,
-                reverb_length: int = 16000,
-                add_dry: bool = True,
-                impulse_response: bool = None,
-                device: str = 'mps'):
-        
+
+    def __init__(
+        self,
+        trainable: bool = True,
+        reverb_length: int = 16000,
+        add_dry: bool = True,
+        impulse_response: bool = None,
+        device: str = "mps",
+    ):
         super(Reverb, self).__init__()
 
         self.trainable = trainable
@@ -37,8 +40,9 @@ class Reverb(nn.Module):
         self.device = device
 
         if self.trainable:
-            self.impulse_response = nn.Parameter(torch.zeros(self.reverb_length), 
-                                                 requires_grad = True)
+            self.impulse_response = nn.Parameter(
+                torch.zeros(self.reverb_length), requires_grad=True
+            )
         else:
             if impulse_response is None:
                 raise ValueError('Must provide "ir" tensor if Reverb trainable=False.')
@@ -57,10 +61,10 @@ class Reverb(nn.Module):
 
         dry_mask = torch.zeros((int(impulse_response.shape[0]), 1))
         return torch.cat([dry_mask, impulse_response[:, 1:]], dim=1)
-    
-    def _match_dimensions(self, 
-                          audio: torch.Tensor, 
-                          impulse_response: torch.Tensor) -> torch.Tensor:
+
+    def _match_dimensions(
+        self, audio: torch.Tensor, impulse_response: torch.Tensor
+    ) -> torch.Tensor:
         """
         Match dimensions of audio and impulse response via batch size
         """
@@ -70,9 +74,8 @@ class Reverb(nn.Module):
         # tile to match batch dim
         batch_size = int(audio.shape[0])
         return torch.tile(impulse_response, [batch_size, 1])
-            
-    def forward(self, 
-                audio: torch.Tensor) -> torch.Tensor:
+
+    def forward(self, audio: torch.Tensor) -> torch.Tensor:
         """
         Apply impulse response to audio
         """
@@ -86,5 +89,7 @@ class Reverb(nn.Module):
                 raise ValueError('Must provide "ir" tensor if Reverb trainable=False.')
 
         impulse_response = self._mask_dry(impulse_response)
-        wet = ops.fft_convolve(audio, impulse_response, padding='same', delay_compensation=0)
+        wet = ops.fft_convolve(
+            audio, impulse_response, padding="same", delay_compensation=0
+        )
         return (wet + audio) if self.add_dry else wet

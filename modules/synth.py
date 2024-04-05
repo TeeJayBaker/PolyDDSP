@@ -4,11 +4,10 @@ Additive Harmonic Synthesiser
 
 import torch
 import torch.nn as nn
-import torch.nn.functional as F
-from scipy import fftpack
 import numpy as np
 import modules.operations as ops
 from typing import Optional
+
 
 class AdditiveSynth(nn.Module):
     """
@@ -17,7 +16,7 @@ class AdditiveSynth(nn.Module):
     Args:
         sample_rate: sample rate of audio
         normalize_below_nyquist: whether to normalize above nyquist
-        amp_resample_method: method of resampling amplitude envelopes, 
+        amp_resample_method: method of resampling amplitude envelopes,
             'window', 'linear', 'cubic' and 'nearest'
         use_angular_cumsum: whether to use angular cumulative sum
         frame_length: length of each frame window
@@ -32,14 +31,16 @@ class AdditiveSynth(nn.Module):
     Output: Filtered noise audio (batch, samples)
     """
 
-    def __init__(self, sample_rate: int = 22050, 
-                 normalize_below_nyquist: bool = True,
-                 amp_resample_method: str = 'window',
-                 use_angular_cumsum: bool = False, 
-                 frame_length: int = 64, 
-                 attenuate_gain: float = 0.02, 
-                 device: str = "mps"):
-        
+    def __init__(
+        self,
+        sample_rate: int = 22050,
+        normalize_below_nyquist: bool = True,
+        amp_resample_method: str = "window",
+        use_angular_cumsum: bool = False,
+        frame_length: int = 64,
+        attenuate_gain: float = 0.02,
+        device: str = "mps",
+    ):
         super(AdditiveSynth, self).__init__()
 
         self.sample_rate = sample_rate
@@ -50,9 +51,9 @@ class AdditiveSynth(nn.Module):
         self.attenuate_gain = attenuate_gain
         self.device = device
 
-    def angular_cumsum(self, 
-                       angular_frequency: torch.Tensor, 
-                       chunk_size: int = 1000) -> torch.Tensor:
+    def angular_cumsum(
+        self, angular_frequency: torch.Tensor, chunk_size: int = 1000
+    ) -> torch.Tensor:
         """
         Get phase by cumulative sumation of angular frequency.
 
@@ -98,8 +99,9 @@ class AdditiveSynth(nn.Module):
         # Split input into chunks.
         length = angular_frequency.shape[1]
         n_chunks = int(length / chunk_size)
-        chunks = torch.reshape(angular_frequency,
-                            (n_batch, n_chunks, chunk_size) + (-1,) * n_ch_dims)
+        chunks = torch.reshape(
+            angular_frequency, (n_batch, n_chunks, chunk_size) + (-1,) * n_ch_dims
+        )
         phase = torch.cumsum(chunks, dim=2)
 
         # Add offsets.
@@ -121,10 +123,10 @@ class AdditiveSynth(nn.Module):
             phase = phase[:, :n_time]
 
         return phase
-    
-    def get_harmonic_frequencies(self, 
-                                 frequencies: torch.Tensor, 
-                                 n_harmonics: int) -> torch.Tensor:
+
+    def get_harmonic_frequencies(
+        self, frequencies: torch.Tensor, n_harmonics: int
+    ) -> torch.Tensor:
         """Create integer multiples of the fundamental frequency.
 
         Args:
@@ -141,11 +143,13 @@ class AdditiveSynth(nn.Module):
         f_ratios = f_ratios[None, None, None, :]
         harmonic_frequencies = frequencies * f_ratios
         return harmonic_frequencies
-          
-    def remove_above_nyquist(self, 
-                             frequency_envelopes: torch.Tensor,
-                             amplitude_envelopes: torch.Tensor,
-                             sample_rate: int = 16000) -> torch.Tensor:
+
+    def remove_above_nyquist(
+        self,
+        frequency_envelopes: torch.Tensor,
+        amplitude_envelopes: torch.Tensor,
+        sample_rate: int = 16000,
+    ) -> torch.Tensor:
         """
         Set amplitudes for oscillators above nyquist to 0.
 
@@ -165,32 +169,40 @@ class AdditiveSynth(nn.Module):
 
         amplitude_envelopes = torch.where(
             torch.gt(frequency_envelopes, sample_rate / 2.0),
-            torch.zeros_like(amplitude_envelopes), amplitude_envelopes)
+            torch.zeros_like(amplitude_envelopes),
+            amplitude_envelopes,
+        )
         return amplitude_envelopes
-    
-    def normalize_harmonics(self, 
-                            harmonic_distribution: torch.Tensor, 
-                            f0_hz: torch.Tensor = None, 
-                            sample_rate: Optional[int] = None) -> torch.Tensor:
+
+    def normalize_harmonics(
+        self,
+        harmonic_distribution: torch.Tensor,
+        f0_hz: torch.Tensor = None,
+        sample_rate: Optional[int] = None,
+    ) -> torch.Tensor:
         """Normalize the harmonic distribution, optionally removing above nyquist."""
         # Bandlimit the harmonic distribution.
         if sample_rate is not None and f0_hz is not None:
             n_harmonics = int(harmonic_distribution.shape[-1])
             harmonic_frequencies = self.get_harmonic_frequencies(f0_hz, n_harmonics)
             harmonic_distribution = self.remove_above_nyquist(
-                harmonic_frequencies, harmonic_distribution, sample_rate)
+                harmonic_frequencies, harmonic_distribution, sample_rate
+            )
 
         # Normalize
         harmonic_distribution = ops.safe_divide(
             harmonic_distribution,
-            torch.sum(harmonic_distribution, dim=-1, keepdim=True))
+            torch.sum(harmonic_distribution, dim=-1, keepdim=True),
+        )
         return harmonic_distribution
-    
-    def resample(self, 
-                 inputs: torch.Tensor,
-                 n_timesteps: int,
-                 method: str = 'linear',
-                 add_endpoint: bool = True) -> torch.Tensor:
+
+    def resample(
+        self,
+        inputs: torch.Tensor,
+        n_timesteps: int,
+        method: str = "linear",
+        add_endpoint: bool = True,
+    ) -> torch.Tensor:
         """Interpolates a tensor from n_frames to n_timesteps.
 
         Args:
@@ -222,7 +234,7 @@ class AdditiveSynth(nn.Module):
         is_2d = len(inputs.shape) == 2
         is_4d = len(inputs.shape) == 4
 
-        # Ensure inputs are at least 3d. 
+        # Ensure inputs are at least 3d.
         if is_1d:
             inputs = inputs[None, None, :]
         elif is_2d:
@@ -231,32 +243,42 @@ class AdditiveSynth(nn.Module):
         def resize(method):
             """Closure around torch.nn.Upsample."""
             # Image resize needs 4-D input. Add/remove extra axis if not 4-D.
-            outputs = inputs[:, :,  :, None] if not is_4d else inputs
-            outputs = nn.Upsample(size=[n_timesteps, outputs.shape[3]], 
-                                  mode=method, align_corners=not add_endpoint)(outputs)
+            outputs = inputs[:, :, :, None] if not is_4d else inputs
+            outputs = nn.Upsample(
+                size=[n_timesteps, outputs.shape[3]],
+                mode=method,
+                align_corners=not add_endpoint,
+            )(outputs)
             return outputs[:, :, :, 0] if not is_4d else outputs
 
-        if method == 'nearest':
-            outputs = resize('nearest')
-        elif method == 'linear':
-            outputs = resize('bilinear')
-        elif method == 'cubic':
-            outputs = resize('bicubic')
-        elif method == 'window':
+        if method == "nearest":
+            outputs = resize("nearest")
+        elif method == "linear":
+            outputs = resize("bilinear")
+        elif method == "cubic":
+            outputs = resize("bicubic")
+        elif method == "window":
             # squash to 3d if 4d
             if is_4d:
                 batch, channels, _, n_freqs = inputs.shape
-                inputs = inputs.permute(0, 3, 1, 2).reshape(batch * n_freqs, channels, -1)
+                inputs = inputs.permute(0, 3, 1, 2).reshape(
+                    batch * n_freqs, channels, -1
+                )
 
             outputs = ops.upsample_with_windows(inputs, n_timesteps, add_endpoint)
 
             # reconstruct 4d
             if is_4d:
-                outputs = outputs.reshape(batch, n_freqs, channels, -1).permute(0, 2, 3, 1)
+                outputs = outputs.reshape(batch, n_freqs, channels, -1).permute(
+                    0, 2, 3, 1
+                )
         else:
-            raise ValueError('Method ({}) is invalid. Must be one of {}.'.format(
-                method, "['nearest', 'linear', 'cubic', 'window']"))
-        
+            raise ValueError(
+                "Method ({}) is invalid. Must be one of {}.".format(
+                    method, "['nearest', 'linear', 'cubic', 'window']"
+                )
+            )
+
         # Return outputs to the same dimensionality of the inputs.
         if is_1d:
             outputs = outputs[0, 0, :]
@@ -264,13 +286,15 @@ class AdditiveSynth(nn.Module):
             outputs = outputs[:, 0, :]
 
         return outputs
-    
-    def oscillator_bank(self, 
-                        frequency_envelopes: torch.Tensor,
-                        amplitude_envelopes: torch.Tensor,
-                        sample_rate: int = 16000,
-                        sum_sinusoids: bool = True,
-                        use_angular_cumsum: bool = False) -> torch.Tensor:
+
+    def oscillator_bank(
+        self,
+        frequency_envelopes: torch.Tensor,
+        amplitude_envelopes: torch.Tensor,
+        sample_rate: int = 16000,
+        sum_sinusoids: bool = True,
+        use_angular_cumsum: bool = False,
+    ) -> torch.Tensor:
         """Generates audio from sample-wise frequencies for a bank of oscillators.
 
         Args:
@@ -296,9 +320,9 @@ class AdditiveSynth(nn.Module):
         amplitude_envelopes = torch.FloatTensor(amplitude_envelopes)
 
         # Don't exceed Nyquist.
-        amplitude_envelopes = self.remove_above_nyquist(frequency_envelopes,
-                                                    amplitude_envelopes,
-                                                    sample_rate)
+        amplitude_envelopes = self.remove_above_nyquist(
+            frequency_envelopes, amplitude_envelopes, sample_rate
+        )
 
         # Angular frequency, Hz -> radians per sample.
         omegas = frequency_envelopes * (2.0 * np.pi)  # rad / sec
@@ -318,15 +342,17 @@ class AdditiveSynth(nn.Module):
             audio = torch.sum(audio, dim=-1)  # [mb, n_samples]
         return audio
 
-    def harmonic_synthesis(self, 
-                           frequencies: torch.Tensor,
-                           amplitudes: torch.Tensor,
-                           harmonic_shifts: Optional[torch.Tensor] = None,
-                           harmonic_distribution: Optional[torch.Tensor] = None,
-                           n_samples: int = 64000,
-                           sample_rate: int = 16000,
-                           amp_resample_method: str = 'window',
-                           use_angular_cumsum: bool = False) -> torch.Tensor:
+    def harmonic_synthesis(
+        self,
+        frequencies: torch.Tensor,
+        amplitudes: torch.Tensor,
+        harmonic_shifts: Optional[torch.Tensor] = None,
+        harmonic_distribution: Optional[torch.Tensor] = None,
+        n_samples: int = 64000,
+        sample_rate: int = 16000,
+        amp_resample_method: str = "window",
+        use_angular_cumsum: bool = False,
+    ) -> torch.Tensor:
         """Generate audio from frame-wise monophonic harmonic oscillator bank.
 
         Args:
@@ -353,7 +379,9 @@ class AdditiveSynth(nn.Module):
         amplitudes = torch.FloatTensor(amplitudes)
 
         if harmonic_distribution is not None:
-            harmonic_distribution = torch.FloatTensor(harmonic_distribution).permute(0, 1, 3, 2)
+            harmonic_distribution = torch.FloatTensor(harmonic_distribution).permute(
+                0, 1, 3, 2
+            )
             n_harmonics = int(harmonic_distribution.shape[-1])
         elif harmonic_shifts is not None:
             harmonic_shifts = torch.FloatTensor(harmonic_shifts)
@@ -364,7 +392,7 @@ class AdditiveSynth(nn.Module):
         # Create harmonic frequencies [batch_size, n_voices, n_frames, n_harmonics].
         harmonic_frequencies = self.get_harmonic_frequencies(frequencies, n_harmonics)
         if harmonic_shifts is not None:
-            harmonic_frequencies *= (1.0 + harmonic_shifts)
+            harmonic_frequencies *= 1.0 + harmonic_shifts
 
         # Create harmonic amplitudes [batch_size, n_voices, n_frames, n_harmonics].
         if harmonic_distribution is not None:
@@ -373,33 +401,40 @@ class AdditiveSynth(nn.Module):
             harmonic_amplitudes = amplitudes.unsqueeze(-1)
 
         # Create sample-wise envelopes.
-        frequency_envelopes = self.resample(harmonic_frequencies, n_samples)  # cycles/sec
-        amplitude_envelopes = self.resample(harmonic_amplitudes, n_samples,
-                                        method=amp_resample_method)
+        frequency_envelopes = self.resample(
+            harmonic_frequencies, n_samples
+        )  # cycles/sec
+        amplitude_envelopes = self.resample(
+            harmonic_amplitudes, n_samples, method=amp_resample_method
+        )
 
-        #reshape voices into harmonics
+        # reshape voices into harmonics
         frequency_envelopes = frequency_envelopes.permute(0, 2, 1, 3).reshape(
             frequency_envelopes.shape[0], frequency_envelopes.shape[2], -1
-            )
+        )
         amplitude_envelopes = amplitude_envelopes.permute(0, 2, 1, 3).reshape(
             amplitude_envelopes.shape[0], amplitude_envelopes.shape[2], -1
-            )
+        )
         # Synthesize from harmonics [batch_size, n_samples].
-        audio = self.oscillator_bank(frequency_envelopes,
-                                amplitude_envelopes,
-                                sample_rate=sample_rate,
-                                use_angular_cumsum=use_angular_cumsum)
+        audio = self.oscillator_bank(
+            frequency_envelopes,
+            amplitude_envelopes,
+            sample_rate=sample_rate,
+            use_angular_cumsum=use_angular_cumsum,
+        )
         return audio
-    
-    def forward(self, x: dict[str, torch.Tensor]) -> torch.Tensor:
-        n_samples = int(np.ceil(x['pitch'].shape[-1] * self.frame_length))
 
-        audio = self.harmonic_synthesis(frequencies = x['pitch'], 
-                                        amplitudes = x['amplitude'], 
-                                        harmonic_shifts = None, 
-                                        harmonic_distribution = x['harmonics'], 
-                                        n_samples = n_samples, 
-                                        sample_rate = self.sample_rate, 
-                                        amp_resample_method = self.amp_resample_method, 
-                                        use_angular_cumsum = self.use_angular_cumsum)
+    def forward(self, x: dict[str, torch.Tensor]) -> torch.Tensor:
+        n_samples = int(np.ceil(x["pitch"].shape[-1] * self.frame_length))
+
+        audio = self.harmonic_synthesis(
+            frequencies=x["pitch"],
+            amplitudes=x["amplitude"],
+            harmonic_shifts=None,
+            harmonic_distribution=x["harmonics"],
+            n_samples=n_samples,
+            sample_rate=self.sample_rate,
+            amp_resample_method=self.amp_resample_method,
+            use_angular_cumsum=self.use_angular_cumsum,
+        )
         return audio

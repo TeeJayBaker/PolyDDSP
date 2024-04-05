@@ -8,10 +8,13 @@ import torch.nn.functional as F
 from scipy import fftpack
 import numpy as np
 
-def exp_sigmoid(x: torch.Tensor, 
-                exponent: float = 10.0, 
-                max_value: float = 2.0, 
-                threshold: float = 1e-7) -> torch.Tensor:
+
+def exp_sigmoid(
+    x: torch.Tensor,
+    exponent: float = 10.0,
+    max_value: float = 2.0,
+    threshold: float = 1e-7,
+) -> torch.Tensor:
     """
     Exponentiated Sigmoid pointwise nonlinearity.
 
@@ -32,9 +35,8 @@ def exp_sigmoid(x: torch.Tensor,
     exponent = torch.tensor(exponent, dtype=x.dtype)
     return max_value * torch.sigmoid(x) ** torch.log(exponent) + threshold
 
-def get_fft_size(frame_size: int, 
-                 ir_size: int, 
-                 power_of_two: bool = True) -> int:
+
+def get_fft_size(frame_size: int, ir_size: int, power_of_two: bool = True) -> int:
     """
     Get FFT size for given frame and IR sizes
 
@@ -49,16 +51,19 @@ def get_fft_size(frame_size: int,
     """
     conv_frame_size = frame_size + ir_size - 1
     if power_of_two:
-        fft_size = int(2**np.ceil(np.log2(conv_frame_size)))
+        fft_size = int(2 ** np.ceil(np.log2(conv_frame_size)))
     else:
         fft_size = int(fftpack.helper.next_fast_len(conv_frame_size))
     return fft_size
 
-def crop_and_compensate_delay(audio: torch.Tensor, 
-                              audio_size: int, 
-                              ir_size: int, 
-                              delay_compensation: int, 
-                              padding: str = 'same') -> torch.Tensor:
+
+def crop_and_compensate_delay(
+    audio: torch.Tensor,
+    audio_size: int,
+    ir_size: int,
+    delay_compensation: int,
+    padding: str = "same",
+) -> torch.Tensor:
     """
     Crop audio to compensate for delay
 
@@ -82,48 +87,48 @@ def crop_and_compensate_delay(audio: torch.Tensor,
         ValueError: If padding is not either 'valid' or 'same'.
     """
     # Crop the output.
-    if padding == 'valid':
+    if padding == "valid":
         crop_size = ir_size + audio_size - 1
-    elif padding == 'same':
+    elif padding == "same":
         crop_size = audio_size
     else:
-        raise ValueError('Padding must be \'valid\' or \'same\', instead '
-                        'of {}.'.format(padding))
+        raise ValueError(
+            "Padding must be 'valid' or 'same', instead " "of {}.".format(padding)
+        )
 
     # Compensate for the group delay of the filter by trimming the front.
     # For an impulse response produced by frequency_impulse_response(),
     # the group delay is constant because the filter is linear phase.
     total_size = int(audio.shape[-1])
     crop = total_size - crop_size
-    start = ((ir_size - 1) // 2 -
-            1 if delay_compensation < 0 else delay_compensation)
+    start = (ir_size - 1) // 2 - 1 if delay_compensation < 0 else delay_compensation
     end = crop - start
     return audio[:, start:-end]
 
-def overlap_and_add(frames: torch.Tensor, 
-                    frame_step: int) -> torch.Tensor:
+
+def overlap_and_add(frames: torch.Tensor, frame_step: int) -> torch.Tensor:
     """
     Reconstructs a signal from a framed representation, recreation of tf.signal.overlap_and_add
-    
+
     Args:
         signal: A [batch_size, frames, frame_length] tensor of floats.
         frame_step: An integer denoting overlap offsets. Must be less than or equal to frame_length.
-        
+
     Returns:
         A 1D tensor of the reconstructed signal.
     """
     # Dimensions
-    overlap_add_filter = torch.eye(frames.shape[-1], requires_grad = False).unsqueeze(1)
-    output_signal = nn.functional.conv_transpose1d(frames.transpose(1, 2), 
-                                                    overlap_add_filter, 
-                                                    stride = frame_step, 
-                                                    padding = 0).squeeze(1)
+    overlap_add_filter = torch.eye(frames.shape[-1], requires_grad=False).unsqueeze(1)
+    output_signal = nn.functional.conv_transpose1d(
+        frames.transpose(1, 2), overlap_add_filter, stride=frame_step, padding=0
+    ).squeeze(1)
 
     return output_signal
 
-def pad_axis(x: torch.Tensor, 
-             padding: tuple[int] = (0, 0), 
-             axis: int = 0, **pad_kwargs) -> torch.Tensor:
+
+def pad_axis(
+    x: torch.Tensor, padding: tuple[int] = (0, 0), axis: int = 0, **pad_kwargs
+) -> torch.Tensor:
     """
     Pads only one axis of a tensor.
 
@@ -137,23 +142,30 @@ def pad_axis(x: torch.Tensor,
         A tensor padded with padding along axis.
     """
     if axis >= len(x.shape):
-        raise ValueError('Axis {} is out of bounds for tensor of dimension {}.'
-                        .format(axis, len(x.shape)))
+        raise ValueError(
+            "Axis {} is out of bounds for tensor of dimension {}.".format(
+                axis, len(x.shape)
+            )
+        )
     n_end_dims = len(x.shape) - axis - 1
-    paddings = (0,0) * n_end_dims + padding
+    paddings = (0, 0) * n_end_dims + padding
     return F.pad(x, paddings, **pad_kwargs)
 
-def safe_divide(numerator: torch.Tensor, 
-                denominator: torch.Tensor, 
-                eps: float = 1e-7) -> torch.Tensor:
+
+def safe_divide(
+    numerator: torch.Tensor, denominator: torch.Tensor, eps: float = 1e-7
+) -> torch.Tensor:
     """Avoid dividing by zero by adding a small epsilon."""
     safe_denominator = torch.where(denominator == 0.0, eps, denominator)
     return numerator / safe_denominator
 
-def fft_convolve(audio: torch.Tensor, 
-                 impulse_response: torch.Tensor, 
-                 padding: str = 'same',
-                 delay_compensation: int = -1) -> torch.Tensor:
+
+def fft_convolve(
+    audio: torch.Tensor,
+    impulse_response: torch.Tensor,
+    padding: str = "same",
+    delay_compensation: int = -1,
+) -> torch.Tensor:
     """
     Filter audio with frames of time-varying impulse responses.
 
@@ -191,7 +203,7 @@ def fft_convolve(audio: torch.Tensor,
             number of impulse response frames is on the order of the audio size and
             not a multiple of the audio size.)
     """
-    audio = torch.FloatTensor(audio) 
+    audio = torch.FloatTensor(audio)
     impulse_response = torch.FloatTensor(impulse_response)
 
     # Get shapes of audio.
@@ -212,15 +224,19 @@ def fft_convolve(audio: torch.Tensor,
 
     # Validate that batch sizes match.
     if batch_size != batch_size_ir:
-        raise ValueError('Batch size of audio ({}) and impulse response ({}) must '
-                        'be the same.'.format(batch_size, batch_size_ir))
+        raise ValueError(
+            "Batch size of audio ({}) and impulse response ({}) must "
+            "be the same.".format(batch_size, batch_size_ir)
+        )
 
     # Cut audio into frames.
     frame_size = int(np.ceil(audio_size / n_ir_frames))
     hop_size = frame_size
 
     # Pad audio to match frame size (and match tf.signal.frame())
-    pad_size = frame_size - abs(audio_size % hop_size) if audio_size % frame_size != 0 else 0
+    pad_size = (
+        frame_size - abs(audio_size % hop_size) if audio_size % frame_size != 0 else 0
+    )
     audio = F.pad(audio, (0, pad_size))
     audio_frames = audio.unfold(-1, frame_size, hop_size)
 
@@ -228,10 +244,11 @@ def fft_convolve(audio: torch.Tensor,
     n_audio_frames = int(audio_frames.shape[1])
     if n_audio_frames != n_ir_frames:
         raise ValueError(
-            'Number of Audio frames ({}) and impulse response frames ({}) do not '
-            'match. For small hop size = ceil(audio_size / n_ir_frames), '
-            'number of impulse response frames must be a multiple of the audio '
-            'size.'.format(n_audio_frames, n_ir_frames))
+            "Number of Audio frames ({}) and impulse response frames ({}) do not "
+            "match. For small hop size = ceil(audio_size / n_ir_frames), "
+            "number of impulse response frames must be a multiple of the audio "
+            "size.".format(n_audio_frames, n_ir_frames)
+        )
 
     # Pad and FFT the audio and impulse responses.
     fft_size = get_fft_size(frame_size, ir_size, power_of_two=True)
@@ -249,13 +266,14 @@ def fft_convolve(audio: torch.Tensor,
         audio_out = audio_frames_out.squeeze(1)
 
     # Crop and shift the output audio.
-    return crop_and_compensate_delay(audio_out, audio_size, ir_size,
-                                            delay_compensation, padding)
+    return crop_and_compensate_delay(
+        audio_out, audio_size, ir_size, delay_compensation, padding
+    )
 
 
-def upsample_with_windows(inputs: torch.Tensor,
-                          n_timesteps: int,
-                          add_endpoint: bool = True) -> torch.Tensor:
+def upsample_with_windows(
+    inputs: torch.Tensor, n_timesteps: int, add_endpoint: bool = True
+) -> torch.Tensor:
     """Upsample a series of frames using using overlapping hann windows.
 
     Good for amplitude envelopes.
@@ -279,8 +297,11 @@ def upsample_with_windows(inputs: torch.Tensor,
     inputs = torch.FloatTensor(inputs)
 
     if len(inputs.shape) != 3:
-        raise ValueError('Upsample_with_windows() only supports 3 dimensions, '
-                        'not {}.'.format(inputs.shape))
+        raise ValueError(
+            "Upsample_with_windows() only supports 3 dimensions, " "not {}.".format(
+                inputs.shape
+            )
+        )
 
     # Mimic behavior of tf.image.resize.
     # For forward (not endpointed), hold value for last interval.
@@ -288,20 +309,23 @@ def upsample_with_windows(inputs: torch.Tensor,
         inputs = torch.cat((inputs, inputs[:, :, -1:]), dim=2)
 
     n_frames = int(inputs.shape[2])
-    n_intervals = (n_frames - 1)
+    n_intervals = n_frames - 1
 
     if n_frames >= n_timesteps:
-        raise ValueError('Upsample with windows cannot be used for downsampling'
-                        'More input frames ({}) than output timesteps ({})'.format(
-                            n_frames, n_timesteps))
+        raise ValueError(
+            "Upsample with windows cannot be used for downsampling"
+            "More input frames ({}) than output timesteps ({})".format(
+                n_frames, n_timesteps
+            )
+        )
 
     if n_timesteps % n_intervals != 0.0:
-        minus_one = '' if add_endpoint else ' - 1'
+        minus_one = "" if add_endpoint else " - 1"
         raise ValueError(
-            'For upsampling, the target the number of timesteps must be divisible '
-            'by the number of input frames{}. (timesteps:{}, frames:{}, '
-            'add_endpoint={}).'.format(minus_one, n_timesteps, n_frames,
-                                    add_endpoint))
+            "For upsampling, the target the number of timesteps must be divisible "
+            "by the number of input frames{}. (timesteps:{}, frames:{}, "
+            "add_endpoint={}).".format(minus_one, n_timesteps, n_frames, add_endpoint)
+        )
 
     # Constant overlap-add, half overlapping windows.
     hop_size = n_timesteps // n_intervals
@@ -312,9 +336,11 @@ def upsample_with_windows(inputs: torch.Tensor,
     # Add dimension for windows [batch_size, n_channels, n_frames, window].
     x = inputs[:, :, :, None]
     window = window[None, None, None, :]
-    x_windowed = (x * window)
+    x_windowed = x * window
     # Collapse channel into batch size
-    x_windowed = torch.reshape(x_windowed, (-1, x_windowed.shape[2], x_windowed.shape[3]))
+    x_windowed = torch.reshape(
+        x_windowed, (-1, x_windowed.shape[2], x_windowed.shape[3])
+    )
     x = overlap_and_add(x_windowed, hop_size)
     # Reshape back to original shape.
     x = torch.reshape(x, (inputs.shape[0], inputs.shape[1], -1))

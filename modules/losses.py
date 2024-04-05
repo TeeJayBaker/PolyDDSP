@@ -7,6 +7,7 @@ import torch.nn as nn
 import torch.nn.functional as F
 import torchaudio
 
+
 class SpectralLoss(nn.Module):
     """
     Multi-scale spectral loss function
@@ -18,18 +19,20 @@ class SpectralLoss(nn.Module):
         loss_type: loss function to use
         mag_weight: weight for magnitude loss
         logmag_weight: weight for log magnitude loss
-        device: Specify whether computed on cpu, cuda or mps 
+        device: Specify whether computed on cpu, cuda or mps
             (bearing in mind fft is not implemented on mps)
     """
-    def __init__(self,
-                fft_sizes: list[int] = [2048, 1024, 512, 256, 128, 64],
-                epsilon: float = 1e-7,
-                overlap: float = 0.75,
-                loss_type: str = 'L1',
-                mag_weight: float = 1.0,
-                logmag_weight: float = 1.0,
-                device: str = 'cpu'):
-        
+
+    def __init__(
+        self,
+        fft_sizes: list[int] = [2048, 1024, 512, 256, 128, 64],
+        epsilon: float = 1e-7,
+        overlap: float = 0.75,
+        loss_type: str = "L1",
+        mag_weight: float = 1.0,
+        logmag_weight: float = 1.0,
+        device: str = "cpu",
+    ):
         super(SpectralLoss, self).__init__()
 
         self.fft_sizes = fft_sizes
@@ -39,18 +42,16 @@ class SpectralLoss(nn.Module):
         self.logmag_weight = logmag_weight
         self.device = device
 
-        if loss_type == 'L1':
+        if loss_type == "L1":
             self.loss = F.l1_loss
-        elif loss_type == 'L2':
+        elif loss_type == "L2":
             self.loss = F.mse_loss
-        elif loss_type == 'cosine':
+        elif loss_type == "cosine":
             self.loss = F.cosine_similarity
         else:
             raise ValueError('loss_type must be one of "L1", "L2", or "cosine"')
-        
-    def spectogram(self, audio: torch.Tensor, 
-                   fft_size: list[int], 
-                   power: int = 1):
+
+    def spectogram(self, audio: torch.Tensor, fft_size: list[int], power: int = 1):
         """
         Compute spectogram from audio
 
@@ -63,18 +64,18 @@ class SpectralLoss(nn.Module):
         """
         audio = torch.FloatTensor(audio)
         audio = audio.to(self.device)
-        return torchaudio.transforms.Spectrogram(n_fft = fft_size, 
-                                                 power = power).to(self.device)(audio)
+        return torchaudio.transforms.Spectrogram(n_fft=fft_size, power=power).to(
+            self.device
+        )(audio)
 
-    def forward(self, x : torch.Tensor,
-                y: torch.Tensor):
+    def forward(self, x: torch.Tensor, y: torch.Tensor):
         """
         Compute multi-scale spectral loss
 
         Args:
             x: input audio tensor
             y: target audio tensor
-        
+
         Returns: multi-scale spectral loss
         """
         for fft_size in self.fft_sizes:

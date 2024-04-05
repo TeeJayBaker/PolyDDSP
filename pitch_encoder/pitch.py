@@ -11,15 +11,15 @@ import numpy as np
 import pitch_encoder.nnAudio.features.cqt as nnAudio
 import math
 import pitch_encoder.utils as utils
-import pandas as pd
 from typing import Optional
 
 MIDI_OFFSET = 21
 MAX_FREQ_IDX = 87
 AUDIO_SAMPLE_RATE = 22050
 FFT_HOP = 256
-ANNOT_N_FRAMES = 2 * 22050 // 256  
+ANNOT_N_FRAMES = 2 * 22050 // 256
 AUDIO_N_SAMPLES = 2 * AUDIO_SAMPLE_RATE - FFT_HOP
+
 
 class harmonic_stacking(nn.Module):
     """
@@ -31,21 +31,21 @@ class harmonic_stacking(nn.Module):
         bins_per_semitone: The number of bins per semitone in the CQT
         harmonics: The list of harmonics to stack
         n_output_freqs: The number of output frequencies to return in each harmonic layer
-        
-    Returns: 
+
+    Returns:
         (batch, n_harmonics, out_freq_bins, time_frames)
     """
 
-    def __init__(self, 
-                 bins_per_semitone: int, 
-                 harmonics: int, 
-                 n_output_freqs: int):
+    def __init__(self, bins_per_semitone: int, harmonics: int, n_output_freqs: int):
         super(harmonic_stacking, self).__init__()
 
         self.bins_per_semitone = bins_per_semitone
         self.harmonics = harmonics
         self.n_output_freqs = n_output_freqs
-        self.shifts = [int(np.round(12 * self.bins_per_semitone * np.log2(float(h)))) for h in self.harmonics]
+        self.shifts = [
+            int(np.round(12 * self.bins_per_semitone * np.log2(float(h))))
+            for h in self.harmonics
+        ]
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         torch._assert(len(x.shape) == 3, "x must be (batch, freq_bins, time_frames)")
@@ -60,19 +60,23 @@ class harmonic_stacking(nn.Module):
             else:
                 raise ValueError("shift must be non-zero")
         x = torch.stack(channels, dim=1)
-        x = x[:, :, :self.n_output_freqs, :]
+        x = x[:, :, : self.n_output_freqs, :]
         return x
-    
-class Conv2dSame(torch.nn.Conv2d):
 
+
+class Conv2dSame(torch.nn.Conv2d):
     def calc_same_pad(self, i: int, k: int, s: int, d: int) -> int:
         return max((math.ceil(i / s) - 1) * s + (k - 1) * d + 1 - i, 0)
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         ih, iw = x.size()[-2:]
 
-        pad_h = self.calc_same_pad(i=ih, k=self.kernel_size[0], s=self.stride[0], d=self.dilation[0])
-        pad_w = self.calc_same_pad(i=iw, k=self.kernel_size[1], s=self.stride[1], d=self.dilation[1])
+        pad_h = self.calc_same_pad(
+            i=ih, k=self.kernel_size[0], s=self.stride[0], d=self.dilation[0]
+        )
+        pad_w = self.calc_same_pad(
+            i=iw, k=self.kernel_size[1], s=self.stride[1], d=self.dilation[1]
+        )
 
         if pad_h > 0 or pad_w > 0:
             x = F.pad(
@@ -87,11 +91,14 @@ class Conv2dSame(torch.nn.Conv2d):
             self.dilation,
             self.groups,
         )
-    
-def constrain_frequency(onsets: torch.Tensor,
-                        frames: torch.Tensor, 
-                        max_freq: Optional[float], 
-                        min_freq: Optional[float]) -> tuple[torch.Tensor, torch.Tensor]:
+
+
+def constrain_frequency(
+    onsets: torch.Tensor,
+    frames: torch.Tensor,
+    max_freq: Optional[float],
+    min_freq: Optional[float],
+) -> tuple[torch.Tensor, torch.Tensor]:
     """
     Constrain the frequency range of the pitch predictions by zeroing out bins outside the range
 
@@ -107,7 +114,7 @@ def constrain_frequency(onsets: torch.Tensor,
     # check inputs are batched
     torch._assert(len(onsets.shape) == 3, "onsets must be (batch, freq, time_frames)")
     torch._assert(len(frames.shape) == 3, "frames must be (batch, freq, time_frames)")
-    
+
     if max_freq is not None:
         max_freq_idx = int(np.round(utils.hz_to_midi(max_freq) - MIDI_OFFSET))
         onsets[:, max_freq_idx:, :].zero_()
@@ -119,9 +126,10 @@ def constrain_frequency(onsets: torch.Tensor,
 
     return onsets, frames
 
-def get_infered_onsets(onsets: torch.Tensor,
-                       frames: torch.Tensor,
-                       n_diff: int = 2) -> torch.Tensor:
+
+def get_infered_onsets(
+    onsets: torch.Tensor, frames: torch.Tensor, n_diff: int = 2
+) -> torch.Tensor:
     """
     Infer onsets from large changes in frame amplutude
 
@@ -155,12 +163,13 @@ def get_infered_onsets(onsets: torch.Tensor,
 
     return max_onsets_diff
 
+
 def argrelmax(x: torch.Tensor) -> torch.Tensor:
     """
     Emulate scipy.signal.argrelmax with axis 1 and order 1 in torch
 
     Args:
-        x: The input tensor (batch, freq_bins, time_frames) 
+        x: The input tensor (batch, freq_bins, time_frames)
 
     Returns:
         The indices of the local maxima
@@ -178,6 +187,7 @@ def argrelmax(x: torch.Tensor) -> torch.Tensor:
 
     return torch.nonzero((diff1 > 0) * (diff2 > 0), as_tuple=True)
 
+
 class basic_pitch(nn.Module):
     """
     Port of basic_pitch pitch prediction to pytorch
@@ -188,18 +198,20 @@ class basic_pitch(nn.Module):
               "note": (batch, freq_bins, time_frames)}
     """
 
-    def __init__(self,
-                sr: int = 16000,
-                hop_length: int = 256,
-                annotation_semitones: int = 88,
-                annotation_base: float = 27.5,
-                n_harmonics: int = 8,
-                n_filters_contour: int = 32,
-                n_filters_onsets: int = 32,
-                n_filters_notes: int = 32,
-                no_contours: bool = False,
-                contour_bins_per_semitone: int = 3,
-                device: str = 'mps'):
+    def __init__(
+        self,
+        sr: int = 16000,
+        hop_length: int = 256,
+        annotation_semitones: int = 88,
+        annotation_base: float = 27.5,
+        n_harmonics: int = 8,
+        n_filters_contour: int = 32,
+        n_filters_onsets: int = 32,
+        n_filters_notes: int = 32,
+        no_contours: bool = False,
+        contour_bins_per_semitone: int = 3,
+        device: str = "mps",
+    ):
         super(basic_pitch, self).__init__()
 
         self.sr = sr
@@ -215,79 +227,82 @@ class basic_pitch(nn.Module):
         self.n_freq_bins_contour = annotation_semitones * contour_bins_per_semitone
         self.device = device
 
-        max_semitones = int(np.floor(12.0 * np.log2(0.5 * self.sr / self.annotation_base)))
+        max_semitones = int(
+            np.floor(12.0 * np.log2(0.5 * self.sr / self.annotation_base))
+        )
 
         n_semitones = np.min(
             [
-                int(np.ceil(12.0 * np.log2(self.n_harmonics)) + self.annotation_semitones),
+                int(
+                    np.ceil(12.0 * np.log2(self.n_harmonics))
+                    + self.annotation_semitones
+                ),
                 max_semitones,
             ]
         )
 
-        self.cqt = nnAudio.CQT2010v2(sr = self.sr,
-                          fmin = self.annotation_base,
-                          hop_length = self.hop_length,
-                          n_bins = n_semitones * self.contour_bins_per_semitone,
-                          bins_per_octave = 12 * self.contour_bins_per_semitone,
-                          verbose=False)
-        
+        self.cqt = nnAudio.CQT2010v2(
+            sr=self.sr,
+            fmin=self.annotation_base,
+            hop_length=self.hop_length,
+            n_bins=n_semitones * self.contour_bins_per_semitone,
+            bins_per_octave=12 * self.contour_bins_per_semitone,
+            verbose=False,
+        )
+
         self.contour_1 = nn.Sequential(
-            nn.Conv2d(self.n_harmonics, self.n_filters_contour, (5, 5), padding='same'),
+            nn.Conv2d(self.n_harmonics, self.n_filters_contour, (5, 5), padding="same"),
             nn.BatchNorm2d(self.n_filters_contour),
             nn.ReLU(),
-            nn.Conv2d(self.n_filters_contour, 8, (3 * 13, 3), padding='same'),
+            nn.Conv2d(self.n_filters_contour, 8, (3 * 13, 3), padding="same"),
             nn.BatchNorm2d(8),
-            nn.ReLU()
+            nn.ReLU(),
         )
 
         self.contour_2 = nn.Sequential(
-            nn.Conv2d(8, 1, (5, 5), padding='same'),
-            nn.Sigmoid()
+            nn.Conv2d(8, 1, (5, 5), padding="same"), nn.Sigmoid()
         )
 
         self.note_1 = nn.Sequential(
             Conv2dSame(1, self.n_filters_notes, (7, 7), (3, 1)),
             nn.ReLU(),
-            nn.Conv2d(self.n_filters_notes, 1, (3, 7), padding='same'),
-            nn.Sigmoid()
+            nn.Conv2d(self.n_filters_notes, 1, (3, 7), padding="same"),
+            nn.Sigmoid(),
         )
 
         self.onset_1 = nn.Sequential(
             Conv2dSame(self.n_harmonics, self.n_filters_onsets, (5, 5), (3, 1)),
             nn.BatchNorm2d(self.n_filters_onsets),
-            nn.ReLU()
+            nn.ReLU(),
         )
 
         self.onset_2 = nn.Sequential(
-            nn.Conv2d(self.n_filters_onsets + 1, 1, (5, 5), padding='same'),
-            nn.Sigmoid()
+            nn.Conv2d(self.n_filters_onsets + 1, 1, (5, 5), padding="same"),
+            nn.Sigmoid(),
         )
 
-        
     def normalised_to_db(self, audio: torch.Tensor) -> torch.Tensor:
         """
         Convert spectrogram to dB and normalise
 
         Args:
-            audio: The spectrogram input. (batch, 1, freq_bins, time_frames) 
+            audio: The spectrogram input. (batch, 1, freq_bins, time_frames)
                 or (batch, freq_bins, time_frames)
 
-        Returns: 
+        Returns:
             the spectogram in dB in the same shape as the input
         """
         power = torch.square(audio)
         log_power = 10.0 * torch.log10(power + 1e-10)
 
-        log_power_min = torch.min(log_power, keepdim=True, dim = -2)[0]
-        log_power_min = torch.min(log_power_min, keepdim=True, dim = -1)[0]
+        log_power_min = torch.min(log_power, keepdim=True, dim=-2)[0]
+        log_power_min = torch.min(log_power_min, keepdim=True, dim=-1)[0]
         log_power_offset = log_power - log_power_min
         log_power_offset_max = torch.max(log_power_offset, keepdim=True, dim=-2)[0]
-        log_power_offset_max = torch.max(log_power_offset_max, keepdim=True, dim=-1)[0]    
+        log_power_offset_max = torch.max(log_power_offset_max, keepdim=True, dim=-1)[0]
 
         log_power_normalised = log_power_offset / log_power_offset_max
         return log_power_normalised
-
-    
 
     def get_cqt(self, audio: torch.Tensor, use_batchnorm: bool) -> torch.Tensor:
         """
@@ -300,11 +315,13 @@ class basic_pitch(nn.Module):
             use_batchnorm: If True, applies batch normalization after computing the CQT
 
 
-        Returns: 
+        Returns:
             the log-normalised CQT of audio (batch, freq_bins, time_frames)
         """
 
-        torch._assert(len(audio.shape) == 2, "audio has multiple channels, only mono is supported")
+        torch._assert(
+            len(audio.shape) == 2, "audio has multiple channels, only mono is supported"
+        )
         x = self.cqt(audio)
         x = self.normalised_to_db(x)
 
@@ -314,26 +331,28 @@ class basic_pitch(nn.Module):
             x = torch.squeeze(x, 1)
 
         return x
-    
+
     def forward(self, x: torch.Tensor) -> dict[str, torch.tensor]:
         x = self.get_cqt(x, use_batchnorm=True)
 
         if self.n_harmonics > 1:
-            x = harmonic_stacking(self.contour_bins_per_semitone,
-                                  [0.5] + list(range(1, self.n_harmonics)),
-                                  self.n_freq_bins_contour)(x)
+            x = harmonic_stacking(
+                self.contour_bins_per_semitone,
+                [0.5] + list(range(1, self.n_harmonics)),
+                self.n_freq_bins_contour,
+            )(x)
         else:
-            x = harmonic_stacking(self.contour_bins_per_semitone,
-                                  [1],
-                                  self.n_freq_bins_contour)(x)
-        
-        # contour layers         
+            x = harmonic_stacking(
+                self.contour_bins_per_semitone, [1], self.n_freq_bins_contour
+            )(x)
+
+        # contour layers
         x_contours = self.contour_1(x)
 
         if not self.no_contours:
             x_contours = self.contour_2(x_contours)
             x_contours = torch.squeeze(x_contours, 1)
-            x_contours_reduced = torch.unsqueeze(x_contours, 1) 
+            x_contours_reduced = torch.unsqueeze(x_contours, 1)
         else:
             x_contours_reduced = x_contours
 
@@ -348,7 +367,8 @@ class basic_pitch(nn.Module):
         x_onset = torch.squeeze(x_onset, 1)
 
         return {"onset": x_onset, "contour": x_contours, "note": x_notes}
-    
+
+
 def midi_pitch_to_contour_bins(pitch_midi: int) -> int:
     """Convert midi pitch to conrresponding index in contour matrix
 
@@ -364,10 +384,11 @@ def midi_pitch_to_contour_bins(pitch_midi: int) -> int:
     pitch_hz = utils.midi_to_hz(pitch_midi)
     bin = 12.0 * contour_bins_per_semitone * np.log2(pitch_hz / annotation_base)
     return int(np.round(bin))
-    
-def get_pitch_bends(contours: torch.Tensor,
-                    note_event: list[int],
-                    n_bins_tolerance: int = 25) -> torch.Tensor:
+
+
+def get_pitch_bends(
+    contours: torch.Tensor, note_event: list[int], n_bins_tolerance: int = 25
+) -> torch.Tensor:
     """
     Get the pitch bends from the contour and note event predictions
 
@@ -378,7 +399,7 @@ def get_pitch_bends(contours: torch.Tensor,
     Returns:
         The pitch bend predictions (time_frames)
     """
-    
+
     contour_bins_per_semitone = 3
     annotation_semitones = 88
     n_freq_bins_contour = contour_bins_per_semitone * annotation_semitones
@@ -394,31 +415,33 @@ def get_pitch_bends(contours: torch.Tensor,
     contours_trans = contours.permute(0, 2, 1)
 
     pitch_bend_submatrix = (
-        contours_trans[
-            batch_idx, start_idx:end_idx, freq_start_idx:freq_end_idx
-        ] * freq_gaussian[
-            max([0, n_bins_tolerance - freq_idx]) : window_length 
+        contours_trans[batch_idx, start_idx:end_idx, freq_start_idx:freq_end_idx]
+        * freq_gaussian[
+            max([0, n_bins_tolerance - freq_idx]) : window_length
             - max([0, freq_idx - (n_freq_bins_contour - n_bins_tolerance - 1)])
         ]
     )
 
     pb_shift = n_bins_tolerance - max([0, n_bins_tolerance - freq_idx])
     bends = (torch.argmax(pitch_bend_submatrix, axis=1) - pb_shift) * 0.25 + freq_midi
-            
+
     return bends
 
-def output_to_notes_polyphonic(frames: torch.Tensor,
-                               onsets: torch.Tensor,
-                               contours: torch.Tensor,
-                               onset_thresh: float = 0.5,
-                               frame_thresh: float = 0.3,
-                               min_note_len: int= 10,
-                               infer_onsets: bool = True,
-                               max_freq: Optional[float] = None,
-                               min_freq: Optional[float] = None,
-                               melodia_trick: bool = True,
-                               n_voices: int = 10,
-                               energy_tol: int = 11) -> tuple[torch.Tensor, torch.Tensor]:
+
+def output_to_notes_polyphonic(
+    frames: torch.Tensor,
+    onsets: torch.Tensor,
+    contours: torch.Tensor,
+    onset_thresh: float = 0.5,
+    frame_thresh: float = 0.3,
+    min_note_len: int = 10,
+    infer_onsets: bool = True,
+    max_freq: Optional[float] = None,
+    min_freq: Optional[float] = None,
+    melodia_trick: bool = True,
+    n_voices: int = 10,
+    energy_tol: int = 11,
+) -> tuple[torch.Tensor, torch.Tensor]:
     """
     Convert pitch predictions to note predictions
 
@@ -444,18 +467,19 @@ def output_to_notes_polyphonic(frames: torch.Tensor,
     # use onsets inferred from frames in addition to the predicted onsets
     if infer_onsets:
         onsets = get_infered_onsets(onsets, frames)
-    
+
     peak_thresh_mat = torch.zeros_like(onsets)
     peaks = argrelmax(onsets)
     peak_thresh_mat[peaks] = onsets[peaks]
 
-
     # permute to make time dimension 1, to ensure time is sorted before frequency
-    onset_idx = torch.nonzero(peak_thresh_mat.permute([0,2,1]) >= onset_thresh)
+    onset_idx = torch.nonzero(peak_thresh_mat.permute([0, 2, 1]) >= onset_thresh)
     # return columns to original order
-    onset_idx = torch.cat([onset_idx[:, 0:1], onset_idx[:, 2:3], onset_idx[:, 1:2]], dim=1)
+    onset_idx = torch.cat(
+        [onset_idx[:, 0:1], onset_idx[:, 2:3], onset_idx[:, 1:2]], dim=1
+    )
     # sort backwards in time?
-    #onset_idx = onset_idx.flip([0])
+    # onset_idx = onset_idx.flip([0])
 
     remaining_energy = torch.clone(frames)
 
@@ -480,7 +504,7 @@ def output_to_notes_polyphonic(frames: torch.Tensor,
 
         i -= k  # go back to frame above threshold
 
-         # if the note is too short, skip it
+        # if the note is too short, skip it
         if i - note_start_idx <= min_note_len:
             continue
 
@@ -490,29 +514,43 @@ def output_to_notes_polyphonic(frames: torch.Tensor,
         if freq_idx > 0:
             remaining_energy[batch_idx, freq_idx - 1, note_start_idx:i] = 0
 
-        bends = get_pitch_bends(contours, [batch_idx, freq_idx + MIDI_OFFSET, note_start_idx, i], 25)
+        bends = get_pitch_bends(
+            contours, [batch_idx, freq_idx + MIDI_OFFSET, note_start_idx, i], 25
+        )
 
         # need to assign notes to voices, first in first out.
         # keep track of voice allocation order
         v = list(range(n_voices))
         for j in range(n_voices):
             if notes[batch_idx, v[j], note_start_idx] == 0:
-                notes[batch_idx, v[j], note_start_idx:i] = utils.tensor_midi_to_hz(bends)
-                amplitude[batch_idx, v[j], note_start_idx:i] = frames[batch_idx, freq_idx, note_start_idx:i]
+                notes[batch_idx, v[j], note_start_idx:i] = utils.tensor_midi_to_hz(
+                    bends
+                )
+                amplitude[batch_idx, v[j], note_start_idx:i] = frames[
+                    batch_idx, freq_idx, note_start_idx:i
+                ]
                 v.insert(0, v.pop(j))
                 break
-            #if no free voice set the lowest amplitude voice to the new note
+            # if no free voice set the lowest amplitude voice to the new note
             if j == n_voices - 1:
-                min_idx = torch.argmin(torch.mean(amplitude[batch_idx, :, note_start_idx:i], dim=1))
-                notes[batch_idx, min_idx, note_start_idx:i] = utils.tensor_midi_to_hz(bends)
-                amplitude[batch_idx, min_idx, note_start_idx:i] = frames[batch_idx, freq_idx, note_start_idx:i]
+                min_idx = torch.argmin(
+                    torch.mean(amplitude[batch_idx, :, note_start_idx:i], dim=1)
+                )
+                notes[batch_idx, min_idx, note_start_idx:i] = utils.tensor_midi_to_hz(
+                    bends
+                )
+                amplitude[batch_idx, min_idx, note_start_idx:i] = frames[
+                    batch_idx, freq_idx, note_start_idx:i
+                ]
                 v.insert(0, v.pop(v.index(min_idx)))
 
     if melodia_trick:
         energy_shape = remaining_energy.shape
 
         while torch.max(remaining_energy) > frame_thresh:
-            batch, freq_idx, i_mid = utils.unravel_index(torch.argmax(remaining_energy), energy_shape)
+            batch, freq_idx, i_mid = utils.unravel_index(
+                torch.argmax(remaining_energy), energy_shape
+            )
             remaining_energy[batch, freq_idx, i_mid] = 0
 
             # forward pass
@@ -558,25 +596,30 @@ def output_to_notes_polyphonic(frames: torch.Tensor,
             if i_end - i_start <= min_note_len:
                 # note is too short, skip it
                 continue
-            
-            bends = get_pitch_bends(contours, [batch, freq_idx + MIDI_OFFSET, i_start, i_end], 25)
+
+            bends = get_pitch_bends(
+                contours, [batch, freq_idx + MIDI_OFFSET, i_start, i_end], 25
+            )
 
             # if there is a gap in available voices, add the note
             v = list(range(n_voices))
             for j in range(n_voices):
                 if notes[batch, v[j], i_start:i_end].sum == 0:
                     notes[batch, v[j], i_start:i_end] = utils.tensor_midi_to_hz(bends)
-                    amplitude[batch, v[j], i_start:i_end] = frames[batch, freq_idx, i_start:i_end]
+                    amplitude[batch, v[j], i_start:i_end] = frames[
+                        batch, freq_idx, i_start:i_end
+                    ]
 
     return notes, amplitude
+
 
 import tensorflow as tf
 from tensorflow import saved_model
 from basic_pitch.inference import window_audio_file, unwrap_output
 from basic_pitch import ICASSP_2022_MODEL_PATH
 
-def basic_pitch_predict_tf(audio):
 
+def basic_pitch_predict_tf(audio):
     overlap_len = 30 * 256
     hop_size = 22050 * 2 - 256 - overlap_len
     n_overlapping_frames = 30
@@ -587,21 +630,42 @@ def basic_pitch_predict_tf(audio):
     batch = audio.shape[0]
     model = saved_model.load(str(ICASSP_2022_MODEL_PATH))
 
-    audio_original = tf.concat([tf.zeros((batch, int(overlap_len / 2),), dtype=tf.float32), tf_audio], axis=1)
+    audio_original = tf.concat(
+        [
+            tf.zeros(
+                (
+                    batch,
+                    int(overlap_len / 2),
+                ),
+                dtype=tf.float32,
+            ),
+            tf_audio,
+        ],
+        axis=1,
+    )
     audio_windowed, _ = window_audio_file(audio_original, hop_size)
 
     windows = audio_windowed.shape[1]
-    audio_windowed = tf.reshape(audio_windowed, (batch * windows, audio_windowed.shape[2], -1))
+    audio_windowed = tf.reshape(
+        audio_windowed, (batch * windows, audio_windowed.shape[2], -1)
+    )
 
     output = model(audio_windowed)
 
-    unwrapped_output = {k: unwrap_output(output[k], audio_original_length, n_overlapping_frames) for k in output}
-    unwrapped_output_np = {k: unwrapped_output[k].reshape((batch, -1, unwrapped_output[k].shape[-1])) for k in unwrapped_output}
-    note = torch.Tensor(unwrapped_output_np['note']).permute(0, 2, 1)
-    onset = torch.Tensor(unwrapped_output_np['onset']).permute(0, 2, 1)
-    contour = torch.Tensor(unwrapped_output_np['contour']).permute(0, 2, 1)
+    unwrapped_output = {
+        k: unwrap_output(output[k], audio_original_length, n_overlapping_frames)
+        for k in output
+    }
+    unwrapped_output_np = {
+        k: unwrapped_output[k].reshape((batch, -1, unwrapped_output[k].shape[-1]))
+        for k in unwrapped_output
+    }
+    note = torch.Tensor(unwrapped_output_np["note"]).permute(0, 2, 1)
+    onset = torch.Tensor(unwrapped_output_np["onset"]).permute(0, 2, 1)
+    contour = torch.Tensor(unwrapped_output_np["contour"]).permute(0, 2, 1)
 
     return note, onset, contour
+
 
 class PitchEncoder(nn.Module):
     """
@@ -616,7 +680,7 @@ class PitchEncoder(nn.Module):
         amplitude: Amplitude features of size (batch, voices, frames)
     """
 
-    def __init__(self, device: str = 'mps'):
+    def __init__(self, device: str = "mps"):
         super(PitchEncoder, self).__init__()
         self.device = device
 
@@ -624,6 +688,7 @@ class PitchEncoder(nn.Module):
         # Check if input is batched
         torch._assert(len(x.shape) == 2, "audio must be batched")
         note, onset, contour = basic_pitch_predict_tf(x)
-        notes, amplitude = output_to_notes_polyphonic(note, onset, contour, 0.5, 0.3, 10, True, None, None)
+        notes, amplitude = output_to_notes_polyphonic(
+            note, onset, contour, 0.5, 0.3, 10, True, None, None
+        )
         return notes, amplitude
-
