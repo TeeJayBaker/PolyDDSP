@@ -37,7 +37,9 @@ class LoudnessExtractor(nn.Module):
         self.attenuate_gain = attenuate_gain
         self.smoothing_window = nn.Parameter(
             torch.hann_window(self.n_fft, dtype=torch.float32), requires_grad=False
-        ).to(self.device)
+        )
+
+        self.to(device)
 
     def A_weighting(self, frequencies: torch.Tensor, min_db: int = -45) -> torch.Tensor:
         """
@@ -87,7 +89,7 @@ class LoudnessExtractor(nn.Module):
         s = torch.stft(
             audio,
             n_fft=self.n_fft,
-            window=torch.hann_window(self.n_fft),
+            window=self.smoothing_window,
             center=True,
             pad_mode="constant",
             return_complex=True,

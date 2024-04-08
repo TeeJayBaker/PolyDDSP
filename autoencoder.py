@@ -42,7 +42,7 @@ class AutoEncoder(nn.Module):
         attenuate_gain: float = 0.02,
         initial_bias: float = -5.0,  # Noise Variables
         window_size: int = 257,
-        device: str = "cpu",
+        device: str = "mps",
     ):
         super(AutoEncoder, self).__init__()
 
@@ -110,12 +110,16 @@ class AutoEncoder(nn.Module):
         return audio, noise, reverbed
 
 
-# import librosa
-# audio = librosa.load("pitch_encoder/01_BN2-131-B_solo_mic.wav", sr=22050, duration=10)[0]
+import librosa
+import torch
 
-# print(audio.shape)
-# audio = torch.tensor(audio).unsqueeze(0).to('cpu')
+audio = librosa.load("pitch_encoder/01_BN2-131-B_solo_mic.wav", sr=22050, duration=10)[
+    0
+]
 
-# model = AutoEncoder()
-# audio, noise, reverbed = model(audio)
-# print(audio.shape, noise.shape, reverbed.shape)
+print(audio.shape)
+audio = torch.tensor(audio).unsqueeze(0).to("mps")
+
+model = AutoEncoder()
+audio, noise, reverbed = model(audio)
+print(audio.shape, noise.shape, reverbed.shape)
