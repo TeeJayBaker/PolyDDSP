@@ -56,10 +56,13 @@ class LoudnessExtractor(nn.Module):
         f_sq = frequencies**2.0
         const = (
             torch.tensor(
-                [12194.217, 20.598997, 107.65265, 737.86223], dtype=torch.float32
-            ).to(self.device)
+                [12194.217, 20.598997, 107.65265, 737.86223],
+                dtype=torch.float32,
+                device=self.device,
+            )
             ** 2.0
         )
+
         weights = 2.0 + 20.0 * (
             torch.log10(const[0])
             + 2 * torch.log10(f_sq)
@@ -98,7 +101,7 @@ class LoudnessExtractor(nn.Module):
         amplitude = torch.abs(s)
         power = amplitude**2
 
-        frequencies = torch.fft.rfftfreq(self.n_fft, 1 / self.sr)
+        frequencies = torch.fft.rfftfreq(self.n_fft, 1 / self.sr, device=self.device)
         a_weighting = self.A_weighting(frequencies).unsqueeze(0).unsqueeze(0)
 
         weighting = 10 ** (a_weighting / 10)
