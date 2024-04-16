@@ -277,7 +277,7 @@ class basic_pitch(nn.Module):
         )
 
         self.onset_2 = nn.Sequential(
-            nn.Conv2d(self.n_filters_onsets + 1, 1, (5, 5), padding="same"),
+            nn.Conv2d(self.n_filters_onsets + 1, 1, (3, 3), padding="same"),
             nn.Sigmoid(),
         )
 
@@ -479,7 +479,7 @@ def output_to_notes_polyphonic(
         [onset_idx[:, 0:1], onset_idx[:, 2:3], onset_idx[:, 1:2]], dim=1
     )
     # sort backwards in time?
-    # onset_idx = onset_idx.flip([0])
+    onset_idx = onset_idx.flip([0])
 
     remaining_energy = torch.clone(frames)
 
@@ -611,60 +611,6 @@ def output_to_notes_polyphonic(
                     ]
 
     return notes, amplitude
-
-
-import tensorflow as tf
-from tensorflow import saved_model
-from basic_pitch.inference import window_audio_file, unwrap_output
-from basic_pitch import ICASSP_2022_MODEL_PATH
-
-
-def basic_pitch_predict_tf(audio):
-    overlap_len = 30 * 256
-    hop_size = 22050 * 2 - 256 - overlap_len
-    n_overlapping_frames = 30
-
-    np_audio = audio.numpy()
-    tf_audio = tf.convert_to_tensor(np_audio, dtype=tf.float32)
-    audio_original_length = audio.shape[-1]
-    batch = audio.shape[0]
-    model = saved_model.load(str(ICASSP_2022_MODEL_PATH))
-
-    audio_original = tf.concat(
-        [
-            tf.zeros(
-                (
-                    batch,
-                    int(overlap_len / 2),
-                ),
-                dtype=tf.float32,
-            ),
-            tf_audio,
-        ],
-        axis=1,
-    )
-    audio_windowed, _ = window_audio_file(audio_original, hop_size)
-
-    windows = audio_windowed.shape[1]
-    audio_windowed = tf.reshape(
-        audio_windowed, (batch * windows, audio_windowed.shape[2], -1)
-    )
-
-    output = model(audio_windowed)
-
-    unwrapped_output = {
-        k: unwrap_output(output[k], audio_original_length, n_overlapping_frames)
-        for k in output
-    }
-    unwrapped_output_np = {
-        k: unwrapped_output[k].reshape((batch, -1, unwrapped_output[k].shape[-1]))
-        for k in unwrapped_output
-    }
-    note = torch.Tensor(unwrapped_output_np["note"]).permute(0, 2, 1)
-    onset = torch.Tensor(unwrapped_output_np["onset"]).permute(0, 2, 1)
-    contour = torch.Tensor(unwrapped_output_np["contour"]).permute(0, 2, 1)
-
-    return note, onset, contour
 
 
 class PitchEncoder(nn.Module):
