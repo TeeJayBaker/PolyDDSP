@@ -613,6 +613,38 @@ def output_to_notes_polyphonic(
     return notes, amplitude
 
 
+def window_audio_file(
+    audio_original: torch.Tensor, hop_size: int, window_length: int
+) -> tuple[torch.Tensor, list[dict[str, int]]]:
+    """
+    Window the audio file into chunks of window_length with hop_size, padded appropriately
+
+    Args:
+        audio_original: The original audio tensor (batch, samples)
+        hop_size: The hop size for the windowing
+        window_length: The length of the window
+
+    Returns:
+        audio_windowed: The windowed audio tensor (batch, windows, window_length)
+        window_times: The list of dictionaries containing the original start and end indices of the windows
+            {"start": int, "end": int}
+    """
+
+    audio_windowed = utils.frame(
+        audio_original, window_length, hop_size, pad_end=True, pad_value=0, axis=-1
+    )
+
+    window_times = [
+        {
+            "start": t_start,
+            "end": t_start + (window_length / AUDIO_SAMPLE_RATE),
+        }
+        for t_start in np.arange(audio_windowed.shape[0]) * hop_size / AUDIO_SAMPLE_RATE
+    ]
+
+    return audio_windowed, window_times
+
+
 class PitchEncoder(nn.Module):
     """
     Pitch encoder, returns pitch and amplitude from raw audio sorted into voices
@@ -638,3 +670,57 @@ class PitchEncoder(nn.Module):
             note, onset, contour, 0.5, 0.3, 10, True, None, None
         )
         return notes, amplitude
+
+
+# import tensorflow as tf
+# from tensorflow import saved_model
+# from basic_pitch.inference import window_audio_file, unwrap_output
+# from basic_pitch import ICASSP_2022_MODEL_PATH
+
+
+# def basic_pitch_predict_tf(audio):
+#     overlap_len = 30 * 256
+#     hop_size = 22050 * 2 - 256 - overlap_len
+#     n_overlapping_frames = 30
+
+#     np_audio = audio.numpy()
+#     tf_audio = tf.convert_to_tensor(np_audio, dtype=tf.float32)
+#     audio_original_length = audio.shape[-1]
+#     batch = audio.shape[0]
+#     model = saved_model.load(str(ICASSP_2022_MODEL_PATH))
+
+#     audio_original = tf.concat(
+#         [
+#             tf.zeros(
+#                 (
+#                     batch,
+#                     int(overlap_len / 2),
+#                 ),
+#                 dtype=tf.float32,
+#             ),
+#             tf_audio,
+#         ],
+#         axis=1,
+#     )
+#     audio_windowed, _ = window_audio_file(audio_original, hop_size)
+
+#     windows = audio_windowed.shape[1]
+#     audio_windowed = tf.reshape(
+#         audio_windowed, (batch * windows, audio_windowed.shape[2], -1)
+#     )
+
+#     output = model(audio_windowed)
+
+#     unwrapped_output = {
+#         k: unwrap_output(output[k], audio_original_length, n_overlapping_frames)
+#         for k in output
+#     }
+#     unwrapped_output_np = {
+#         k: unwrapped_output[k].reshape((batch, -1, unwrapped_output[k].shape[-1]))
+#         for k in unwrapped_output
+#     }
+#     note = torch.Tensor(unwrapped_output_np["note"]).permute(0, 2, 1)
+#     onset = torch.Tensor(unwrapped_output_np["onset"]).permute(0, 2, 1)
+#     contour = torch.Tensor(unwrapped_output_np["contour"]).permute(0, 2, 1)
+
+#     return note, onset, contour
