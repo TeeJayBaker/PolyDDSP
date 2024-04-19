@@ -645,6 +645,34 @@ def window_audio_file(
     return audio_windowed, window_times
 
 
+def unwrap_output(
+    output: torch.Tensor, audio_original_length: int, n_overlapping_frames: int
+) -> torch.Tensor:
+    """
+    Unwrap the output from the model to the original audio length
+
+    Args:
+        output: The output tensor (batch, windows, freq_bins, time_frames)
+        audio_original_length: The original length of the audio
+        n_overlapping_frames: The number of overlapping frames
+
+    Returns:
+        The unwrapped output tensor (batch, freq_bins, audio_original_length)
+    """
+    if output.dim() != 4:
+        raise ValueError("output must have 4 dimensions")
+
+    n_olap = int(n_overlapping_frames / 2)
+    if n_olap > 0:
+        output = output[:, :, :, n_olap:-n_olap]
+
+    n_output_frames_original = int(np.floor(audio_original_length // FFT_HOP))
+    unwrapped_output = output.permute(0, 2, 1, 3).reshape(
+        output.shape[0], output.shape[2], -1
+    )
+    return unwrapped_output[:, :, :n_output_frames_original]
+
+
 class PitchEncoder(nn.Module):
     """
     Pitch encoder, returns pitch and amplitude from raw audio sorted into voices
