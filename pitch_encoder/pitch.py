@@ -281,6 +281,8 @@ class basic_pitch(nn.Module):
             nn.Sigmoid(),
         )
 
+        self.to(self.device)
+
     def normalised_to_db(self, audio: torch.Tensor) -> torch.Tensor:
         """
         Convert spectrogram to dB and normalise
@@ -630,7 +632,7 @@ def window_audio_file(
             {"start": int, "end": int}
     """
 
-    audio_windowed = utils.frame(
+    audio_windowed, _ = utils.frame(
         audio_original, window_length, hop_size, pad_end=True, pad_value=0, axis=-1
     )
 
@@ -686,17 +688,89 @@ class PitchEncoder(nn.Module):
         amplitude: Amplitude features of size (batch, voices, frames)
     """
 
-    def __init__(self, device: str = "mps"):
+    def __init__(
+        self,
+        sr: int = 16000,
+        hop_length: int = 256,
+        annotation_semitones: int = 88,
+        annotation_base: float = 27.5,
+        n_harmonics: int = 8,
+        n_filters_contour: int = 32,
+        n_filters_onsets: int = 32,
+        n_filters_notes: int = 32,
+        no_contours: bool = False,
+        contour_bins_per_semitone: int = 3,
+        device: str = "mps",
+    ):
         super(PitchEncoder, self).__init__()
         self.device = device
+        self.overlap_len = 30 * 256
+        self.hop_size = 22050 * 2 - 256 - self.overlap_len
+        self.n_overlapping_frames = 30
+
+        self.model = basic_pitch(
+            sr,
+            hop_length,
+            annotation_semitones,
+            annotation_base,
+            n_harmonics,
+            n_filters_contour,
+            n_filters_onsets,
+            n_filters_notes,
+            no_contours,
+            contour_bins_per_semitone,
+            device,
+        )
 
     def forward(self, x: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
         # Check if input is batched
         torch._assert(len(x.shape) == 2, "audio must be batched")
-        note, onset, contour = basic_pitch_predict_tf(x)
-        notes, amplitude = output_to_notes_polyphonic(
-            note, onset, contour, 0.5, 0.3, 10, True, None, None
+        audio_original = torch.cat(
+            [
+                torch.zeros(
+                    (
+                        x.shape[0],
+                        int(self.overlap_len / 2),
+                    ),
+                    dtype=torch.float32,
+                    device=self.device,
+                ),
+                x,
+            ],
+            axis=1,
         )
+        audio_original_length = x.shape[-1]
+
+        audio_windowed, _ = window_audio_file(
+            audio_original, self.hop_size, self.overlap_len
+        )
+
+        batch, windows, _ = audio_windowed.shape
+        audio_windowed = audio_windowed.reshape((batch * windows, -1))
+
+        output = self.model(audio_windowed)
+
+        unwrapped_output = {
+            k: unwrap_output(
+                output[k].reshape(batch, windows, output[k].shape[1], -1),
+                audio_original_length,
+                self.n_overlapping_frames,
+            )
+            for k in output
+        }
+
+        notes, amplitude = output_to_notes_polyphonic(
+            unwrapped_output["note"],
+            unwrapped_output["onset"],
+            unwrapped_output["contour"],
+            0.5,
+            0.3,
+            10,
+            True,
+            None,
+            None,
+        )
+
         return notes, amplitude
 
 
