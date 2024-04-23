@@ -118,7 +118,9 @@ def overlap_and_add(frames: torch.Tensor, frame_step: int) -> torch.Tensor:
         A 1D tensor of the reconstructed signal.
     """
     # Dimensions
-    overlap_add_filter = torch.eye(frames.shape[-1], requires_grad=False).unsqueeze(1)
+    overlap_add_filter = torch.eye(
+        frames.shape[-1], requires_grad=False, device=frames.device
+    ).unsqueeze(1)
     output_signal = nn.functional.conv_transpose1d(
         frames.transpose(1, 2), overlap_add_filter, stride=frame_step, padding=0
     ).squeeze(1)
@@ -203,8 +205,8 @@ def fft_convolve(
             number of impulse response frames is on the order of the audio size and
             not a multiple of the audio size.)
     """
-    audio = torch.FloatTensor(audio)
-    impulse_response = torch.FloatTensor(impulse_response)
+    # audio = torch.FloatTensor(audio)
+    # impulse_response = torch.FloatTensor(impulse_response)
 
     # Get shapes of audio.
     batch_size, audio_size = list(audio.size())
@@ -294,7 +296,7 @@ def upsample_with_windows(
         ValueError: If n_timesteps is not divisible by n_frames (if add_endpoint is
         true) or n_frames - 1 (if add_endpoint is false).
     """
-    inputs = torch.FloatTensor(inputs)
+    # inputs = torch.FloatTensor(inputs)
 
     if len(inputs.shape) != 3:
         raise ValueError(
@@ -330,7 +332,7 @@ def upsample_with_windows(
     # Constant overlap-add, half overlapping windows.
     hop_size = n_timesteps // n_intervals
     window_length = 2 * hop_size
-    window = torch.hann_window(window_length)  # [window]
+    window = torch.hann_window(window_length, device=inputs.device)  # [window]
 
     # Broadcast multiply.
     # Add dimension for windows [batch_size, n_channels, n_frames, window].

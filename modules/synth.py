@@ -137,9 +137,12 @@ class AdditiveSynth(nn.Module):
             harmonic_frequencies: Oscillator frequencies (Hz).
             Shape [batch_size, n_voices, n_frames, n_harmonics].
         """
-        frequencies = torch.FloatTensor(frequencies).unsqueeze(-1)
+        # frequencies = torch.FloatTensor(frequencies)
+        frequencies = frequencies.unsqueeze(-1)
 
-        f_ratios = torch.linspace(1.0, float(n_harmonics), int(n_harmonics))
+        f_ratios = torch.linspace(
+            1.0, float(n_harmonics), int(n_harmonics), device=frequencies.device
+        )
         f_ratios = f_ratios[None, None, None, :]
         harmonic_frequencies = frequencies * f_ratios
         return harmonic_frequencies
@@ -164,8 +167,8 @@ class AdditiveSynth(nn.Module):
             amplitude_envelopes: Sample-wise filtered oscillator amplitude.
                 Shape [batch_size, n_samples, n_sinusoids].
         """
-        frequency_envelopes = torch.FloatTensor(frequency_envelopes)
-        amplitude_envelopes = torch.FloatTensor(amplitude_envelopes)
+        # frequency_envelopes = torch.FloatTensor(frequency_envelopes)
+        # amplitude_envelopes = torch.FloatTensor(amplitude_envelopes)
 
         amplitude_envelopes = torch.where(
             torch.gt(frequency_envelopes, sample_rate / 2.0),
@@ -229,7 +232,7 @@ class AdditiveSynth(nn.Module):
             'window'.
         """
 
-        inputs = torch.FloatTensor(inputs)
+        # inputs = torch.FloatTensor(inputs)
         is_1d = len(inputs.shape) == 1
         is_2d = len(inputs.shape) == 2
         is_4d = len(inputs.shape) == 4
@@ -316,8 +319,8 @@ class AdditiveSynth(nn.Module):
             wav: Sample-wise audio. Shape [batch_size, n_samples, n_sinusoids] if
             sum_sinusoids=False, else shape is [batch_size, n_samples].
         """
-        frequency_envelopes = torch.FloatTensor(frequency_envelopes)
-        amplitude_envelopes = torch.FloatTensor(amplitude_envelopes)
+        # frequency_envelopes = torch.FloatTensor(frequency_envelopes)
+        # amplitude_envelopes = torch.FloatTensor(amplitude_envelopes)
 
         # Don't exceed Nyquist.
         amplitude_envelopes = self.remove_above_nyquist(
@@ -375,16 +378,15 @@ class AdditiveSynth(nn.Module):
         Returns:
             audio: Output audio. Shape [batch_size, n_samples]
         """
-        frequencies = torch.FloatTensor(frequencies)
-        amplitudes = torch.FloatTensor(amplitudes)
+        # frequencies = torch.FloatTensor(frequencies)
+        # amplitudes = torch.FloatTensor(amplitudes)
 
         if harmonic_distribution is not None:
-            harmonic_distribution = torch.FloatTensor(harmonic_distribution).permute(
-                0, 1, 3, 2
-            )
+            # harmonic_distribution = torch.FloatTensor(harmonic_distribution)
+            harmonic_distribution = harmonic_distribution.permute(0, 1, 3, 2)
             n_harmonics = int(harmonic_distribution.shape[-1])
         elif harmonic_shifts is not None:
-            harmonic_shifts = torch.FloatTensor(harmonic_shifts)
+            # harmonic_shifts = torch.FloatTensor(harmonic_shifts)
             n_harmonics = int(harmonic_shifts.shape[-1])
         else:
             n_harmonics = 1

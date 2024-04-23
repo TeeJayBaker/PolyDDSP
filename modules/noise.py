@@ -36,6 +36,7 @@ class FilteredNoise(nn.Module):
         self.window_size = window_size
         self.frame_length = frame_length
         self.attenuate_gain = attenuate_gain
+        self.device = device
         self.to(device)
 
     def apply_window_to_impulse_response(
@@ -65,7 +66,7 @@ class FilteredNoise(nn.Module):
         ir_size = int(impulse_response.shape[-1])
         if (window_size <= 0) or (window_size > ir_size):
             window_size = ir_size
-        window = torch.hann_window(window_size)
+        window = torch.hann_window(window_size, device=impulse_response.device)
 
         # Zero pad the window and put in in zero-phase form.
         padding = ir_size - window_size
@@ -175,9 +176,9 @@ class FilteredNoise(nn.Module):
         filter_coeff = filter_coeff.mean(dim=1).permute(0, 2, 1)
         magnitudes = ops.exp_sigmoid(filter_coeff + self.initial_bias)
 
-        noise = torch.FloatTensor(batch_size, num_frames * self.frame_length).uniform_(
-            -1, 1
-        )
+        noise = torch.empty(
+            batch_size, num_frames * self.frame_length, device=self.device
+        ).uniform_(-1, 1)
         return (
             self.frequency_filter(noise, magnitudes, window_size=self.window_size)
             * self.attenuate_gain

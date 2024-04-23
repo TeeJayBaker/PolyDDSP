@@ -485,8 +485,8 @@ def output_to_notes_polyphonic(
 
     remaining_energy = torch.clone(frames)
 
-    notes = torch.zeros((n_batch, n_voices, n_frames), dtype=torch.float32)
-    amplitude = torch.zeros((n_batch, n_voices, n_frames), dtype=torch.float32)
+    notes = torch.zeros((n_batch, n_voices, n_frames), device=onsets.device)
+    amplitude = torch.zeros((n_batch, n_voices, n_frames), device=onsets.device)
 
     # from each onset_idx, search for strings of frames that are above the frame threshold in remaining_energy, allowing for gaps shorter than energy_tol
     for batch_idx, freq_idx, note_start_idx in onset_idx:
@@ -721,6 +721,7 @@ class PitchEncoder(nn.Module):
             contour_bins_per_semitone,
             device,
         )
+        self.to(device)
 
     def forward(self, x: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
         # Check if input is batched

@@ -60,7 +60,9 @@ class Reverb(nn.Module):
         if len(impulse_response.shape) == 3:
             impulse_response = impulse_response.squeeze(1)
 
-        dry_mask = torch.zeros((int(impulse_response.shape[0]), 1))
+        dry_mask = torch.zeros(
+            (int(impulse_response.shape[0]), 1), device=impulse_response.device
+        )
         return torch.cat([dry_mask, impulse_response[:, 1:]], dim=1)
 
     def _match_dimensions(
@@ -80,8 +82,8 @@ class Reverb(nn.Module):
         """
         Apply impulse response to audio
         """
-        audio = torch.FloatTensor(audio)
-        impulse_response = torch.FloatTensor(self.impulse_response)
+        # 3audio = torch.FloatTensor(audio)
+        impulse_response = self.impulse_response
 
         if self.trainable:
             impulse_response = self._match_dimensions(audio, impulse_response)

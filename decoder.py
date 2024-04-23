@@ -109,19 +109,31 @@ class Decoder(nn.Module):
         self.max_voices = max_voices
 
         self.f0_mlp = MLP(
-            input_dim=1, hidden_dims=mlp_hidden_dims, layer_num=mlp_layer_num
+            input_dim=1,
+            hidden_dims=mlp_hidden_dims,
+            layer_num=mlp_layer_num,
+            device=device,
         )
         self.amplitude_mlp = MLP(
-            input_dim=1, hidden_dims=mlp_hidden_dims, layer_num=mlp_layer_num
+            input_dim=1,
+            hidden_dims=mlp_hidden_dims,
+            layer_num=mlp_layer_num,
+            device=device,
         )
         self.loudness_mlp = MLP(
-            input_dim=1, hidden_dims=mlp_hidden_dims, layer_num=mlp_layer_num
+            input_dim=1,
+            hidden_dims=mlp_hidden_dims,
+            layer_num=mlp_layer_num,
+            device=device,
         )
 
         # Timbre pipeline
         if self.use_z:
             self.timbre_mlp = MLP(
-                input_dim=z_units, hidden_dims=mlp_hidden_dims, layer_num=mlp_layer_num
+                input_dim=z_units,
+                hidden_dims=mlp_hidden_dims,
+                layer_num=mlp_layer_num,
+                device=device,
             )
             num_mlp = 4
         else:
@@ -133,16 +145,18 @@ class Decoder(nn.Module):
             num_layers=1,
             batch_first=True,
             bidirectional=bidirectional,
+            device=device,
         )
 
         self.decoder_mlp = MLP(
             input_dim=gru_units * 2 if bidirectional else gru_units,
             hidden_dims=mlp_hidden_dims,
             layer_num=mlp_layer_num,
+            device=device,
         )
 
-        self.dense_harmonic = nn.Linear(mlp_hidden_dims, n_harmonics + 1)
-        self.dense_filter = nn.Linear(mlp_hidden_dims, n_freqs)
+        self.dense_harmonic = nn.Linear(mlp_hidden_dims, n_harmonics + 1, device=device)
+        self.dense_filter = nn.Linear(mlp_hidden_dims, n_freqs, device=device)
 
         self.to(device)
 
