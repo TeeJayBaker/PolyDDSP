@@ -1,3 +1,4 @@
 *.wav
 .DS_Store
 *.pyc
+wandb/*

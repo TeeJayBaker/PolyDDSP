@@ -62,10 +62,8 @@ class SpectralLoss(nn.Module):
 
         Returns: spectogram of audio
         """
-        audio = torch.FloatTensor(audio)
-        audio = audio.to(self.device)
-        return torchaudio.transforms.Spectrogram(n_fft=fft_size, power=power).to(
-            self.device
+        return torchaudio.transforms.Spectrogram(
+            n_fft=fft_size, power=power, wkwargs={"device": audio.device}
         )(audio)
 
     def forward(self, x: torch.Tensor, y: torch.Tensor):

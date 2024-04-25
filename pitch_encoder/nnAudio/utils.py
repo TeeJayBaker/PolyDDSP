@@ -1,6 +1,7 @@
 """
 Module containing helper functions such as overlap sum and Fourier kernels generators
 """
+
 import sys
 
 import torch
@@ -39,14 +40,13 @@ def rfft_fn(x, n=None, onesided=False):
     else:
         return torch.rfft(x, n, onesided=onesided)
 
+
 ## --------------------------- Filter Design ---------------------------##
 def torch_window_sumsquare(w, n_frames, stride, n_fft, power=2):
     w_stacks = w.unsqueeze(-1).repeat((1, n_frames)).unsqueeze(0)
     # Window length + stride*(frames-1)
     output_len = w_stacks.shape[1] + stride * (w_stacks.shape[2] - 1)
-    return fold(
-        w_stacks ** power, (1, output_len), kernel_size=(1, n_fft), stride=stride
-    )
+    return fold(w_stacks**power, (1, output_len), kernel_size=(1, n_fft), stride=stride)
 
 
 def overlap_add(X, stride):
@@ -367,13 +367,13 @@ def create_fourier_kernels(
 
         for k in range(freq_bins):  # Only half of the bins contain useful info
             # print("log freq = {}".format(np.exp(k*scaling_ind)*start_bin*sr/n_fft))
-            bins2freq.append(2**(k * scaling_ind) * start_bin * sr / n_fft)
-            binslist.append((2**(k * scaling_ind) * start_bin))
+            bins2freq.append(2 ** (k * scaling_ind) * start_bin * sr / n_fft)
+            binslist.append((2 ** (k * scaling_ind) * start_bin))
             wsin[k, 0, :] = np.sin(
-                2 * np.pi * (2**(k * scaling_ind) * start_bin) * s / n_fft
+                2 * np.pi * (2 ** (k * scaling_ind) * start_bin) * s / n_fft
             )
             wcos[k, 0, :] = np.cos(
-                2 * np.pi * (2**(k * scaling_ind) * start_bin) * s / n_fft
+                2 * np.pi * (2 ** (k * scaling_ind) * start_bin) * s / n_fft
             )
 
     elif freq_scale == "no":
@@ -407,7 +407,7 @@ def create_cqt_kernels(
     fmax=None,
     topbin_check=True,
     gamma=0,
-    pad_fft=True
+    pad_fft=True,
 ):
     """
     Automatically create CQT kernels in time domain
@@ -435,14 +435,12 @@ def create_cqt_kernels(
     if np.max(freqs) > fs / 2 and topbin_check == True:
         raise ValueError(
             "The top bin {}Hz has exceeded the Nyquist frequency, \
-                          please reduce the n_bins".format(
-                np.max(freqs)
-            )
+                          please reduce the n_bins".format(np.max(freqs))
         )
 
     alpha = 2.0 ** (1.0 / bins_per_octave) - 1.0
     lengths = np.ceil(Q * fs / (freqs + gamma / alpha))
-    
+
     # get max window length depending on gamma value
     max_len = int(max(lengths))
     fftLen = int(2 ** (np.ceil(np.log2(max_len))))
@@ -461,7 +459,11 @@ def create_cqt_kernels(
             start = int(np.ceil(fftLen / 2.0 - l / 2.0))
 
         window_dispatch = get_window_dispatch(window, int(l), fftbins=True)
-        sig = window_dispatch * np.exp(np.r_[-l // 2 : l // 2] * 1j * 2 * np.pi * freq / fs) / l
+        sig = (
+            window_dispatch
+            * np.exp(np.r_[-l // 2 : l // 2] * 1j * 2 * np.pi * freq / fs)
+            / l
+        )
 
         if norm:  # Normalizing the filter # Trying to normalize like librosa
             tempKernel[k, start : start + int(l)] = sig / np.linalg.norm(sig, norm)
@@ -507,11 +509,11 @@ def get_cqt_complex(x, cqt_kernels_real, cqt_kernels_imag, hop_length, padding):
             x
         )  # When center == True, we need padding at the beginning and ending
     except:
-        warnings.warn(
-            f"\ninput size = {x.shape}\tkernel size = {cqt_kernels_real.shape[-1]}\n"
-            "padding with reflection mode might not be the best choice, try using constant padding",
-            UserWarning,
-        )
+        # warnings.warn(
+        #     f"\ninput size = {x.shape}\tkernel size = {cqt_kernels_real.shape[-1]}\n"
+        #     "padding with reflection mode might not be the best choice, try using constant padding",
+        #     UserWarning,
+        # )
         x = torch.nn.functional.pad(
             x, (cqt_kernels_real.shape[-1] // 2, cqt_kernels_real.shape[-1] // 2)
         )
