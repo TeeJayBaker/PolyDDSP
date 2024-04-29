@@ -251,10 +251,11 @@ class basic_pitch(nn.Module):
         )
 
         self.contour_1 = nn.Sequential(
-            nn.Conv2d(self.n_harmonics, self.n_filters_contour, (5, 5), padding="same"),
-            nn.BatchNorm2d(self.n_filters_contour),
-            nn.ReLU(),
-            nn.Conv2d(self.n_filters_contour, 8, (3 * 13, 3), padding="same"),
+            # nn.Conv2d(self.n_harmonics, self.n_filters_contour, (5, 5), padding="same"),
+            # nn.BatchNorm2d(self.n_filters_contour),
+            # nn.ReLU(),
+            # nn.Conv2d(self.n_filters_contour, 8, (3 * 13, 3), padding="same"),
+            nn.Conv2d(self.n_harmonics, 8, (3 * 13, 3), padding="same"),
             nn.BatchNorm2d(8),
             nn.ReLU(),
         )
@@ -721,6 +722,9 @@ class PitchEncoder(nn.Module):
             contour_bins_per_semitone,
             device,
         )
+        self.model.load_state_dict(torch.load("bp_pytorch.pth"))
+        self.model.eval()
+
         self.to(device)
 
     def forward(self, x: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
@@ -749,7 +753,8 @@ class PitchEncoder(nn.Module):
         batch, windows, _ = audio_windowed.shape
         audio_windowed = audio_windowed.reshape((batch * windows, -1))
 
-        output = self.model(audio_windowed)
+        with torch.no_grad():
+            output = self.model(audio_windowed)
 
         unwrapped_output = {
             k: unwrap_output(
