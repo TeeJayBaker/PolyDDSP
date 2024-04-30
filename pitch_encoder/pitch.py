@@ -336,8 +336,9 @@ class basic_pitch(nn.Module):
         return x
 
     def forward(self, x: torch.Tensor) -> dict[str, torch.tensor]:
+        print(x.shape)
         x = self.get_cqt(x, use_batchnorm=True)
-
+        print(x.shape)
         if self.n_harmonics > 1:
             x = harmonic_stacking(
                 self.contour_bins_per_semitone,
@@ -348,7 +349,7 @@ class basic_pitch(nn.Module):
             x = harmonic_stacking(
                 self.contour_bins_per_semitone, [1], self.n_freq_bins_contour
             )(x)
-
+        print(x.shape)
         # contour layers
         x_contours = self.contour_1(x)
 
