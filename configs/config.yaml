@@ -1,0 +1,55 @@
+defaults:
+  - experiment: guitarset
+
+ckpt: null  # set on the eval CLI: `ckpt=outputs/<run>/best.pt`
+
+run:
+  name: ${experiment.name}_${now:%Y%m%d_%H%M%S}
+  seed: 0
+  out_dir: ${oc.env:POLYDDSP_OUT_DIR,outputs}/${run.name}
+  data_root: ${oc.env:POLYDDSP_DATA_DIR,/data/polyddsp}
+  fresh: false
+
+hydra:
+  run:
+    dir: ${run.out_dir}
+
+model:
+  sr: 16000
+  clip_seconds: 4
+  frame_hop: 64
+  n_harmonics: 100
+  z_dim: 16
+  noise_bands: 65
+  noise_window: 0       # 0 → window_size = ir_size = 2*(n_bands-1) (DDSP default)
+  reverb_len: 48000     # DDSP solo_instrument.gin
+  loudness_n_fft: 512   # DDSP compute_loudness default
+  gru_hidden: 512
+  mlp_hidden: 512
+  mlp_layers: 3
+
+optim:
+  type: adam            # adam | adamw
+  lr: 3e-4
+  weight_decay: 0.0     # only used when type=adamw
+
+schedule:
+  type: exp_decay       # exp_decay | sgdr
+  gamma_per_step: 0.999998  # 0.98 ** (1/10000), matches DDSP Trainer
+  T_0: 50000            # only used when type=sgdr
+  T_mult: 2
+
+train:
+  steps: 100000         # loss is near-flat after ~50k; the DDSP paper used 1M
+  batch_size: 12
+  grad_clip: 3.0
+  precision: fp32
+  log_every: 1000
+  eval_cheap_every: 5000
+  eval_full_every: 100000   # the FAD/CLAP battery is expensive; fire it once at the final step
+  ckpt_keep_top_k: 3
+
+wandb:
+  project: polyddsp
+  entity: null
+  mode: online

@@ -1,0 +1,16 @@
+# @package _global_
+experiment:
+  name: maestro
+  dataset:
+    root: ${run.data_root}/maestro/bach_2018
+    file_glob: "**/*.wav"
+  model:
+    n_voices: 10
+    use_z: false
+    use_reverb: true
+    use_noise: false
+    pitch_source: cached_basic_pitch
+  metrics:
+    primary: [loudness, multipitch, mss, mfcc, clap, fad]
+    multipitch: true
+    clap_prompt: "solo grand piano"

@@ -1,0 +1,15 @@
+# @package _global_
+experiment:
+  name: guitarset
+  dataset:
+    root: ${run.data_root}/guitarset
+    file_glob: "**/*_mix.wav"
+  model:
+    n_voices: 6
+    use_z: true
+    use_reverb: false
+    pitch_source: cached_basic_pitch
+  metrics:
+    primary: [loudness, multipitch, mss, mfcc, clap, fad]
+    multipitch: true
+    clap_prompt: "solo acoustic guitar"

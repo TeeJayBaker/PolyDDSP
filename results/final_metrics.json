@@ -1,0 +1,32 @@
+{
+  "guitarset": {
+    "source_run": "guitarset_v6_bp_step0eval_20260429",
+    "step": 100000,
+    "n_voices": 6,
+    "use_z": true,
+    "use_reverb": false,
+    "use_noise": true,
+    "batch_size": 12,
+    "mss": 0.6424516899296298,
+    "clap_fd_final": 0.049467803310385194,
+    "fad": 0.4378707432362141,
+    "multipitch_mean": 0.0009561577312687851,
+    "mfcc": 1.6065345340050183,
+    "loudness_l1": 1.7802812079397532
+  },
+  "maestro": {
+    "source_run": "maestro_v6_bp_reverb_nocap_nonoise_20260430",
+    "step": 100000,
+    "n_voices": 6,
+    "use_z": false,
+    "use_reverb": true,
+    "use_noise": false,
+    "batch_size": 12,
+    "mss": 0.4232356434303617,
+    "clap_fd_final": 0.052271360726118404,
+    "fad": 1.2345107306570737,
+    "multipitch_mean": 0.001168730037493838,
+    "mfcc": 1.6745004778816586,
+    "loudness_l1": 2.408013891984546
+  }
+}

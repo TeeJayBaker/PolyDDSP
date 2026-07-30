@@ -1,0 +1,40 @@
+# Python
+__pycache__/
+*.py[cod]
+.Python
+*.egg-info/
+.venv/
+.pytest_cache/
+
+# uv / pip
+build/
+dist/
+
+# Outputs
+outputs/
+wandb/
+results/*
+!results/final_metrics.json
+*.parquet
+
+# Checkpoints (tracked exception: the ported Basic Pitch weights)
+*.pth
+*.pt
+!polyddsp/model/weights/bp_pytorch.pth
+
+# Datasets are never stored in the repo; point POLYDDSP_DATA_DIR at them instead
+*.mp3
+*.wav
+*.flac
+
+# Local agent/editor state
+.claude/
+.idea/
+.vscode/
+*.swp
+
+# OS
+.DS_Store
+
+# Papers are linked, not vendored
+*.pdf
