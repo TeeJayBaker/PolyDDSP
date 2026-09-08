@@ -197,7 +197,7 @@ class BasicPitchModel(nn.Module):
 def load_basic_pitch(weights: Optional[Path] = None) -> BasicPitchModel:
     model = BasicPitchModel()
     weights = weights or WEIGHTS_PATH
-    state = torch.load(weights, map_location="cpu")
+    state = torch.load(weights, map_location="cpu", weights_only=True)
     model.load_state_dict(state)
     model.eval()
     for p in model.parameters():

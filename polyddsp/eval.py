@@ -86,7 +86,7 @@ def main(cfg: DictConfig) -> None:
             "architecture will not match the checkpoint.",
             ckpt_path.parent,
         )
-        state = torch.load(ckpt_path, map_location="cpu")
+        state = torch.load(ckpt_path, map_location="cpu", weights_only=True)
         model = PolyDDSP.from_cfg(cfg).to(device)
         model.load_state_dict(state["model"])
 
@@ -101,6 +101,7 @@ def main(cfg: DictConfig) -> None:
         file_glob=cfg.experiment.dataset.file_glob,
         pitch_cache_kind=pitch_cache_kind,
         pitch_cache_suffix=pitch_cache_suffix,
+        pitch_cache_root=cfg.experiment.dataset.get("pitch_cache_root"),
         f0_hop=cfg.model.frame_hop,
         n_voices=n_voices_for_cache,
     )

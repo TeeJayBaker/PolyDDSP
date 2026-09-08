@@ -43,3 +43,18 @@ def test_precompute_one_bp_is_idempotent(tmp_path: Path) -> None:
 
 def test_bp_cache_suffix_includes_voices_sr_hop() -> None:
     assert bp_cache_suffix(n_voices=6, sample_rate=16000, target_hop=64) == "bp_v6_sr16000_hop64"
+
+
+def test_cache_path_for_mirrors_nested_path_in_output_dir(tmp_path: Path) -> None:
+    root = tmp_path / "audio"
+    audio = root / "player_00" / "take.wav"
+    output_dir = tmp_path / "pitch-cache"
+
+    cache = cache_path_for(
+        audio,
+        "bp_v6_sr16000_hop64",
+        root=root,
+        output_dir=output_dir,
+    )
+
+    assert cache == output_dir / "player_00" / "take.wav.bp_v6_sr16000_hop64.f0.pt"

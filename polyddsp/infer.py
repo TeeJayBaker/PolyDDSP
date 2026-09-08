@@ -8,10 +8,9 @@ audio file. Both `key=value` (shown above, and in the README) and the usual
 
 **Why argparse and not Hydra**, unlike `train.py` / `eval.py`:
 
-1. `configs/config.yaml` sets `hydra.run.dir: ${run.out_dir}`, so `@hydra.main`
-   would create a fresh timestamped run directory and chdir into it merely to
-   render a wav — and `out=y.wav` would then resolve against that new cwd
-   instead of the user's.
+1. Rendering is not a Hydra job: it should not compose an experiment config or
+   initialise Hydra's job logging/runtime merely to turn one file into another.
+   Plain argparse also keeps input/output paths relative to the caller's cwd.
 2. For inference the *run directory's* saved `config.yaml` must be
    authoritative. Composing defaults from `configs/` would silently rebuild a
    different architecture than the checkpoint was trained with unless every
@@ -83,7 +82,7 @@ def load_run(ckpt_path: str | Path, device: str = "cpu") -> tuple[PolyDDSP, Dict
     cfg = OmegaConf.load(cfg_path)
     model = PolyDDSP.from_cfg(cfg)
 
-    state = torch.load(ckpt_path, map_location="cpu")
+    state = torch.load(ckpt_path, map_location="cpu", weights_only=True)
     if isinstance(state, dict) and "model" in state:
         state = state["model"]
     model.load_state_dict(state)

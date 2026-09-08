@@ -45,18 +45,23 @@ environment consistent. Files are split 80/20 train/val from `run.seed`.
 
 ```bash
 # 1. Transcribe the dataset to a pitch cache. Required before training.
-python -m polyddsp.preprocess --n-voices 6 \
+polyddsp-preprocess --n-voices 6 \
     --glob '**/*_mix.wav' --root $POLYDDSP_DATA_DIR/guitarset
 
 # 2. Train
-python -m polyddsp.train experiment=guitarset
+polyddsp-train experiment=guitarset
 
 # 3. Evaluate a checkpoint
 python -m polyddsp.eval experiment=guitarset ckpt=outputs/<run>/best.pt
 
 # 4. Render audio from a checkpoint
-python -m polyddsp.infer ckpt=outputs/<run>/best.pt input=clip.wav out=resynth.wav
+polyddsp-infer ckpt=outputs/<run>/best.pt input=clip.wav out=resynth.wav
 ```
+
+By default preprocessing writes each cache beside its source audio. To keep the
+dataset untouched, add `--output-dir preprocessed/guitarset`, then train with
+`experiment.dataset.pitch_cache_root=preprocessed/guitarset`. Nested paths are
+preserved beneath the separate cache directory.
 
 - `--n-voices` must match the config's `model.n_voices`. `--glob` defaults to
   `**/*.mp3`, so pass it explicitly; for MAESTRO use
@@ -88,8 +93,8 @@ lower-is-better; machine-readable copy in `results/final_metrics.json`.
 | loudness L1 | 1.780 | 2.408 |
 
 ```bash
-python -m polyddsp.train experiment=guitarset
-python -m polyddsp.train experiment=maestro experiment.model.n_voices=6
+polyddsp-train experiment=guitarset
+polyddsp-train experiment=maestro experiment.model.n_voices=6
 ```
 
 MAESTRO ships `n_voices: 10`; the run above used 6, which fits in 24 GB and was

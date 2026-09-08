@@ -12,6 +12,7 @@ dist/
 
 # Outputs
 outputs/
+data/
 wandb/
 results/*
 !results/final_metrics.json

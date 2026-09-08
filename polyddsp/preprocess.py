@@ -3,11 +3,13 @@
 For each `<file>` matching `--glob`, runs Basic Pitch, extracts note events, and
 allocates them to `--n-voices` slots. The resulting `{pitch, velocity}` tensors
 (each (V, T) at `audio_len // hop` frames of the target sample rate) are cached
-to `<file>.<suffix>.f0.pt`. Idempotent: skips files whose cache mtime is newer
-than the source audio mtime.
+beside the audio by default. With `--output-dir`, paths relative to `--root` are
+preserved beneath a separate cache root. Idempotent: skips files whose cache
+mtime is newer than the source audio mtime.
 
 Usage:
-    uv run python -m polyddsp.preprocess --root <dir> [--glob '**/*.mp3'] \\
+    uv run python -m polyddsp.preprocess --root <dir> [--output-dir <dir>] \\
+        [--glob '**/*.mp3'] \\
         [--sample-rate 16000] [--hop 64] [--n-voices 6] [--device cuda] \\
         [--min-freq HZ] [--max-freq HZ]
 
@@ -26,13 +28,30 @@ from typing import TYPE_CHECKING, Optional
 import soundfile as sf
 import torch
 import torchaudio.functional as AF
+from tqdm.auto import tqdm
 
 if TYPE_CHECKING:
     from polyddsp.model.pitch import BasicPitchModel
 
 
-def cache_path_for(audio_path: Path, suffix: str) -> Path:
-    return audio_path.with_suffix(audio_path.suffix + f".{suffix}.f0.pt")
+def cache_path_for(
+    audio_path: Path,
+    suffix: str,
+    *,
+    root: Path | None = None,
+    output_dir: Path | None = None,
+) -> Path:
+    """Return a cache path, optionally mirrored beneath a separate output root."""
+    target = audio_path
+    if output_dir is not None:
+        if root is None:
+            raise ValueError("root is required when output_dir is provided")
+        try:
+            relative = audio_path.resolve().relative_to(root.resolve())
+        except ValueError as exc:
+            raise ValueError(f"audio path {audio_path} is outside dataset root {root}") from exc
+        target = output_dir / relative
+    return target.with_suffix(target.suffix + f".{suffix}.f0.pt")
 
 
 def load_resample(path: Path, target_sr: int) -> torch.Tensor:
@@ -72,6 +91,8 @@ def precompute_one_bp(
     bp_model: Optional["BasicPitchModel"] = None,
     min_freq: float | None = None,
     max_freq: float | None = None,
+    root: Path | None = None,
+    output_dir: Path | None = None,
 ) -> tuple[Path, bool]:
     """Cache (pitch, velocity) tensors at target rate. Returns (cache_path, recomputed).
 
@@ -83,7 +104,7 @@ def precompute_one_bp(
     from polyddsp.model.pitch import BP_NATIVE_SR, basic_pitch_to_voices
 
     suffix = bp_cache_suffix(n_voices, sample_rate, target_hop)
-    cache = cache_path_for(audio_path, suffix)
+    cache = cache_path_for(audio_path, suffix, root=root, output_dir=output_dir)
     if cache.exists() and cache.stat().st_mtime > audio_path.stat().st_mtime:
         return cache, False
 
@@ -104,6 +125,7 @@ def precompute_one_bp(
         max_freq=max_freq,
     )
 
+    cache.parent.mkdir(parents=True, exist_ok=True)
     torch.save({"pitch": pitch.contiguous(), "velocity": velocity.contiguous()}, cache)
     return cache, True
 
@@ -111,6 +133,14 @@ def precompute_one_bp(
 def main(argv: list[str] | None = None) -> None:
     p = argparse.ArgumentParser(description=__doc__)
     p.add_argument("--root", type=Path, required=True)
+    p.add_argument(
+        "--output-dir", "--output_dir",
+        dest="output_dir",
+        type=Path,
+        default=None,
+        help=("Optional cache root; the source directory structure is mirrored beneath it. "
+              "By default caches are written beside the audio files."),
+    )
     p.add_argument("--glob", default="**/*.mp3")
     p.add_argument("--sample-rate", type=int, default=16000)
     p.add_argument("--hop", type=int, default=64)
@@ -143,14 +173,23 @@ def main(argv: list[str] | None = None) -> None:
 
     t0 = time.perf_counter()
     n_written = 0
-    for f in files:
-        cache, recomputed = precompute_one_bp(
-            f, args.sample_rate, args.hop, args.n_voices, args.device,
-            bp_model=bp_model, min_freq=args.min_freq, max_freq=args.max_freq,
-        )
-        n_written += int(recomputed)
-        marker = "wrote" if recomputed else "skip "
-        print(f"  [{marker}] {f.name} -> {cache.name}")
+    progress = tqdm(files, desc="preprocess", unit="file", dynamic_ncols=True, position=0)
+    # A second, text-only line keeps long filenames from changing the main
+    # bar's width. Unlike tqdm.write(), it is replaced in place and erased when
+    # preprocessing finishes instead of leaving one permanent line per file.
+    status = tqdm(total=0, bar_format="{desc}", leave=False, dynamic_ncols=True, position=1)
+    try:
+        for f in progress:
+            cache, recomputed = precompute_one_bp(
+                f, args.sample_rate, args.hop, args.n_voices, args.device,
+                bp_model=bp_model, min_freq=args.min_freq, max_freq=args.max_freq,
+                root=args.root, output_dir=args.output_dir,
+            )
+            n_written += int(recomputed)
+            marker = "wrote" if recomputed else "skip "
+            status.set_description_str(f"[{marker}] {f.relative_to(args.root)}", refresh=True)
+    finally:
+        status.close()
     print(f"done: {n_written}/{len(files)} recomputed in {time.perf_counter() - t0:.1f}s")
 
 

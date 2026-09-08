@@ -4,6 +4,8 @@ experiment:
   dataset:
     root: ${run.data_root}/maestro/bach_2018
     file_glob: "**/*.wav"
+    # null keeps the legacy sidecar layout; set this to use a separate cache tree.
+    pitch_cache_root: null
   model:
     n_voices: 10
     use_z: false
