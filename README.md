@@ -45,8 +45,7 @@ environment consistent. Files are split 80/20 train/val from `run.seed`.
 
 ```bash
 # 1. Transcribe the dataset to a pitch cache. Required before training.
-polyddsp-preprocess --n-voices 6 \
-    --glob '**/*_mix.wav' --root $POLYDDSP_DATA_DIR/guitarset
+polyddsp-preprocess experiment=guitarset
 
 # 2. Train
 polyddsp-train experiment=guitarset
@@ -59,20 +58,91 @@ polyddsp-infer ckpt=outputs/<run>/best.pt input=clip.wav out=resynth.wav
 ```
 
 By default preprocessing writes each cache beside its source audio. To keep the
-dataset untouched, add `--output-dir preprocessed/guitarset`, then train with
+dataset untouched, add `output_dir=preprocessed/guitarset`. When
+training or evaluating, read those caches with
 `experiment.dataset.pitch_cache_root=preprocessed/guitarset`. Nested paths are
-preserved beneath the separate cache directory.
+preserved beneath the separate output directory. `output_dir=null`
+keeps the default of writing beside the source audio.
 
-- `--n-voices` must match the config's `model.n_voices`. `--glob` defaults to
-  `**/*.mp3`, so pass it explicitly; for MAESTRO use
-  `--glob '**/*.wav' --root $POLYDDSP_DATA_DIR/maestro/bach_2018`.
+To preprocess with Neutone AMT, pass a Lightning checkpoint or an ONNX export:
+
+```bash
+polyddsp-preprocess experiment=guitarset \
+    data_root=/media/ssd2/data/guitarset/audio_mono-pickup_mix \
+    output_dir=./data/neutone-amt/guitarset \
+    model=neutone_amt \
+    model_path=./checkpoints/NeutoneAMT/amt.onnx
+```
+
+Keep any accompanying `amt.onnx.data` file beside `amt.onnx`. Both streaming
+exports (audio plus state cache) and offline exports are supported. Streaming
+state resets for each file; multi-delay exports use the first/lowest-delay
+readout, matching the checkpoint backend. Timing comes from export metadata,
+with 44.1 kHz / hop 512 defaults for older exports. Output caches use the
+`neutone_v{V}_sr{sample_rate}_hop{hop}` suffix and constant MIDI velocity 64.
+ONNX Runtime is installed by `uv sync`, with CPU and CUDA support on Linux
+x86-64 and CPU support on other platforms. Use `device=cpu` to force
+CPU inference or `device=cuda:0` to select a GPU.
+
+For nonstreaming ONNX on CUDA, preprocessing checks audio headers and skips files
+longer than 65,000 model hops (about 12 minutes 35 seconds at 44.1 kHz / hop 512).
+This leaves room for internal padding below cuDNN's 65,535-step RNN limit.
+Each skip prints the filename, duration, and limit without loading the waveform
+or writing a cache. Streaming ONNX and CPU inference do not use this limit.
+Skipped recordings must be excluded from the training input or preprocessed
+separately with the streaming export or CPU.
+
+To train using these Neutone caches:
+
+```bash
+polyddsp-train experiment=guitarset \
+    experiment.dataset.root=/media/ssd2/data/guitarset/audio_mono-pickup_mix \
+    experiment.dataset.pitch_cache_root=./data/neutone-amt/guitarset \
+    experiment.dataset.pitch_cache_backend=neutone
+```
+
+Pass the same dataset overrides when evaluating. `pitch_cache_backend` defaults
+to `basic_pitch`; selecting `neutone` uses the `neutone_v6_sr16000_hop64` suffix
+for this configuration. Both use the existing `cached_basic_pitch` pitch source,
+which reads the shared pitch/velocity tensor format.
+
+Set `parallel=true` to process files concurrently with
+[Memex](https://github.com/bgenchel/Memex). Without it, processing is sequential.
+Memex runs one file first to estimate memory needs, then chooses concurrency
+from available memory while preserving `memory_headroom=2048` MiB per
+device. With parallel processing, `device=cuda` lets Memex spread
+tasks across all GPUs exposed by `CUDA_VISIBLE_DEVICES`;
+`device=cuda:0` pins work to the first visible GPU, and
+`device=cpu` uses CPU processes.
+
+Each task loads its own model and processes up to
+`files_per_task=4` files sequentially before exiting. This setting
+applies only to parallel preprocessing; it is neither the number of workers nor
+an inference batch size. Increase that setting to
+amortize startup on short clips, or lower it for more frequent progress updates
+and finer scheduling. Blocks within a streaming recording remain sequential.
+Existing fresh caches are skipped before starting workers, and completed cache
+files are published atomically so Memex can retry an out-of-memory task safely.
+More workers use more memory; throughput depends on the model and available
+compute.
+
+- `configs/preprocess.yaml` owns preprocessing settings. Only `data_root`,
+  `file_glob`, and `n_voices` default to values from the
+  selected experiment; each can also be overridden directly. Select the pitch
+  model with `model=basic_pitch` or `model=neutone_amt`.
+  Set `sample_rate` and `hop` to match the training model's
+  `model.sr` and `model.frame_hop`, and match the voice count too. Training's
+  `experiment.dataset.pitch_cache_backend` selects which generated cache to
+  read (`basic_pitch` or `neutone`); its `pitch_cache_root` points to the
+  preprocessing output directory when using separate cache storage.
 - The cache is a per-file `.bp_v{V}_sr16000_hop64.f0.pt` sidecar, and is skipped
   if newer than its audio.
 - `infer` transcribes in-process, so it needs no cache and takes any audio file.
-- Config is Hydra (`configs/config.yaml` + `configs/experiment/*.yaml`); any key
-  can be overridden on the CLI, e.g. `train.batch_size=8`. Checkpoints, the
-  resolved config, `log.jsonl` and metric summaries go to
-  `$POLYDDSP_OUT_DIR/<run.name>/`. Pass `wandb.mode=disabled` to run offline.
+- Config is Hydra (`configs/config.yaml`, `configs/preprocess.yaml`, and
+  `configs/experiment/*.yaml`); any key can be overridden on the CLI, e.g.
+  `train.batch_size=8`. Checkpoints, the resolved config, `log.jsonl` and metric
+  summaries go to `$POLYDDSP_OUT_DIR/<run.name>/`. Pass `wandb.mode=disabled`
+  to run offline.
 
 ## Results
 

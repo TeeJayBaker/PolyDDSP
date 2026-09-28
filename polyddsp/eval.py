@@ -90,7 +90,9 @@ def main(cfg: DictConfig) -> None:
         model = PolyDDSP.from_cfg(cfg).to(device)
         model.load_state_dict(state["model"])
 
-    pitch_cache_kind, pitch_cache_suffix, n_voices_for_cache = resolve_pitch_cache(cfg)
+    pitch_cache_kind, pitch_cache_suffix, n_voices_for_cache = resolve_pitch_cache(
+        cfg, backend=cfg.experiment.dataset.get("pitch_cache_backend", "basic_pitch"),
+    )
 
     val_ds = RawAudioDataset(
         root=cfg.experiment.dataset.root,

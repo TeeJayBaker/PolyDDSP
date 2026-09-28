@@ -1,9 +1,9 @@
 # @package _global_
 experiment:
-  name: guitarset
+  name: gaps
   dataset:
-    root: ${run.data_root}/guitarset
-    file_glob: "**/*_mix.wav"
+    root: ${run.data_root}/gaps
+    file_glob: "**/*wc.wav"
     # null keeps the legacy sidecar layout; set this to use a separate cache tree.
     pitch_cache_root: null
     pitch_cache_backend: basic_pitch  # basic_pitch or neutone
@@ -15,4 +15,4 @@ experiment:
   metrics:
     primary: [loudness, multipitch, mss, mfcc, clap, fad]
     multipitch: true
-    clap_prompt: "solo acoustic guitar"
+    clap_prompt: "solo classical guitar"

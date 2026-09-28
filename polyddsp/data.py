@@ -68,7 +68,7 @@ class RawAudioDataset(Dataset):
         clip_seconds: float = 4.0,
         seed: int = 0,
         file_glob: str = "**/*.wav",
-        pitch_cache_kind: Literal["basic_pitch"] | None = None,
+        pitch_cache_kind: Literal["basic_pitch", "neutone"] | None = None,
         pitch_cache_suffix: str | None = None,
         pitch_cache_root: str | None = None,
         f0_hop: int = 64,
@@ -102,7 +102,7 @@ class RawAudioDataset(Dataset):
 
         if pitch_cache_kind is not None:
             if n_voices is None:
-                raise ValueError("pitch_cache_kind='basic_pitch' requires n_voices")
+                raise ValueError(f"pitch_cache_kind={pitch_cache_kind!r} requires n_voices")
             missing = [
                 p for p in self.active
                 if not cache_path_for(
@@ -114,11 +114,18 @@ class RawAudioDataset(Dataset):
             ]
             if missing:
                 preprocess_cmd = (
-                    f"python -m polyddsp.preprocess --root {self.root} "
-                    f"--n-voices {n_voices}"
+                    f"polyddsp-preprocess data_root={self.root} "
+                    f"file_glob='{file_glob}' "
+                    f"model={'neutone_amt' if pitch_cache_kind == 'neutone' else 'basic_pitch'} "
+                    f"n_voices={n_voices} "
+                    f"sample_rate={sample_rate} hop={f0_hop}"
                 )
+                if pitch_cache_kind == "neutone":
+                    preprocess_cmd += " model_path=/path/to/amt.onnx"
                 if self.pitch_cache_root is not None:
-                    preprocess_cmd += f" --output-dir {self.pitch_cache_root}"
+                    preprocess_cmd += (
+                        f" output_dir={self.pitch_cache_root}"
+                    )
                 raise FileNotFoundError(
                     f"pitch cache missing for {len(missing)}/{len(self.active)} files "
                     f"(suffix={pitch_cache_suffix}); run `{preprocess_cmd}`. "

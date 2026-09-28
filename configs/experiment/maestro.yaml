@@ -6,6 +6,7 @@ experiment:
     file_glob: "**/*.wav"
     # null keeps the legacy sidecar layout; set this to use a separate cache tree.
     pitch_cache_root: null
+    pitch_cache_backend: basic_pitch  # basic_pitch or neutone
   model:
     n_voices: 10
     use_z: false

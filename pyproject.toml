@@ -18,6 +18,11 @@ dependencies = [
     "omegaconf>=2.3",
     "wandb>=0.16",
     "nnAudio>=0.3",
+    "neutone-amt",
+    "memex[nvidia]",
+    # Keep ONNX Runtime on CUDA 12 alongside PyTorch (1.27 switches to CUDA 13).
+    "onnxruntime-gpu>=1.21,<1.27; sys_platform == 'linux' and platform_machine == 'x86_64'",
+    "onnxruntime>=1.21,<1.27; sys_platform != 'linux' or platform_machine != 'x86_64'",
     "audio-metrics>=1.0.4",
     "pyarrow>=15.0",
     "resampy>=0.4,<0.5",
@@ -31,9 +36,7 @@ polyddsp-train = "polyddsp.train:main"
 polyddsp-infer = "polyddsp.infer:main"
 
 [dependency-groups]
-dev = [
-    "pytest>=8.0",
-]
+dev = ["pytest>=8.0"]
 
 # Keep the PyTorch packages on synchronized releases and CUDA builds. The CUDA
 # 12.6 wheels support Ampere GPUs; CUDA 12.x minor-version compatibility has a
@@ -42,6 +45,8 @@ dev = [
 torch = { index = "pytorch-cu126", marker = "sys_platform == 'linux'" }
 torchaudio = { index = "pytorch-cu126", marker = "sys_platform == 'linux'" }
 torchvision = { index = "pytorch-cu126", marker = "sys_platform == 'linux'" }
+neutone-amt = { git = "ssh://git@github.com/hyakuchiki/neutoneAMT.git", branch = "benjie/update-pytorch" }
+memex = { git = "https://github.com/bgenchel/Memex.git", rev = "65bb3f07e3a41b9119a82ed43ed96dd1f15db2ae" }
 
 [tool.uv]
 # laion-clap 1.1.7 declares numpy<2, but its inference path uses no removed

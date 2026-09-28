@@ -1,0 +1,29 @@
+defaults:
+  - experiment: guitarset
+  - override hydra/job_logging: stdout
+  - _self_
+
+run:
+  data_root: ${oc.env:POLYDDSP_DATA_DIR,/data/polyddsp}
+
+data_root: ${experiment.dataset.root}
+file_glob: ${experiment.dataset.file_glob}
+n_voices: ${experiment.model.n_voices}
+model: basic_pitch     # basic_pitch | neutone_amt
+model_path: null       # Neutone Lightning checkpoint or ONNX export
+output_dir: null       # null writes beside source audio; otherwise mirrors dataset paths here
+sample_rate: 16000
+hop: 64
+min_freq: null
+max_freq: null
+device: auto           # auto | cpu | cuda | cuda:N
+parallel: false
+files_per_task: 4      # files processed sequentially per worker, reusing its model (parallel only)
+memory_headroom: 2048  # MiB reserved per device by Memex
+
+hydra:
+  run:
+    dir: .
+  output_subdir: null
+  job:
+    chdir: false

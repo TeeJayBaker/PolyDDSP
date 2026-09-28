@@ -336,7 +336,7 @@ class PitchEncoder(nn.Module):
             raise RuntimeError(
                 f"PitchEncoder(source={self.source!r}) requires pitch_hint and velocity_hint; "
                 "the dataset must return a dict with 'pitch' and 'velocity' (precompute via "
-                "`python -m polyddsp.preprocess --n-voices N`)"
+                "`polyddsp-preprocess experiment=<name>`)"
             )
         pitch = pitch_hint[..., :target_frames].to(device=audio.device, dtype=torch.float32)
         velocity = velocity_hint[..., :target_frames].to(device=audio.device, dtype=torch.float32)
