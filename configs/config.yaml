@@ -10,7 +10,7 @@ run:
   seed: 0
   out_dir: ${oc.env:POLYDDSP_OUT_DIR,outputs}/${run.name}
   data_root: ${oc.env:POLYDDSP_DATA_DIR,/data/polyddsp}
-  fresh: false
+  fresh: true
 
 hydra:
   # Do not let Hydra eagerly create a timestamped directory before `main()`.
@@ -57,7 +57,6 @@ train:
   eval_full_every: 100000   # the FAD/CLAP battery is expensive; fire it once at the final step
   ckpt_keep_top_k: 3
 
-wandb:
-  project: polyddsp
-  entity: null
-  mode: online
+tensorboard:
+  enabled: true        # false disables event files/audio; log.jsonl is still written
+  flush_secs: 30       # background event-file flush interval

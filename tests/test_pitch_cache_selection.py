@@ -94,7 +94,7 @@ def test_preprocess_hydra_config_uses_experiment_values(tmp_path, experiment, vo
             "files_per_task=2",
         ])
     options = preprocess_options_from_cfg(cfg)
-    assert not {"train", "optim", "schedule", "wandb", "ckpt", "preprocess"} & set(cfg)
+    assert not {"train", "optim", "schedule", "tensorboard", "ckpt", "preprocess"} & set(cfg)
     assert options.root == audio_root
     assert options.output_dir == cache_root
     assert options.file_glob == file_glob
