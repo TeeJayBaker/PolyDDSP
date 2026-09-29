@@ -14,6 +14,7 @@ dist/
 outputs/
 data/
 wandb/
+events.out.tfevents.*
 results/*
 !results/final_metrics.json
 *.parquet

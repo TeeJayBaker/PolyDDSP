@@ -141,8 +141,38 @@ compute.
 - Config is Hydra (`configs/config.yaml`, `configs/preprocess.yaml`, and
   `configs/experiment/*.yaml`); any key can be overridden on the CLI, e.g.
   `train.batch_size=8`. Checkpoints, the resolved config, `log.jsonl` and metric
-  summaries go to `$POLYDDSP_OUT_DIR/<run.name>/`. Pass `wandb.mode=disabled`
-  to run offline.
+  summaries go to `$POLYDDSP_OUT_DIR/<run.name>/` (default: `outputs/<run.name>/`).
+
+### Training logs
+
+Training logs locally to TensorBoard; no account or logging service is required.
+Start the dashboard with:
+
+```bash
+uv run tensorboard --logdir "${POLYDDSP_OUT_DIR:-outputs}"
+```
+
+Open `http://localhost:6006`. Each run writes events under
+`<run.out_dir>/tensorboard/` (or the reused run directory when resuming):
+
+- Scalars retain the existing tags: `loss`, `val/<metric>`, and
+  `val/final/<metric>`, at the same training/evaluation intervals.
+- Audio retains all six previews: reference, prediction, harmonic, noise,
+  peak-normalized dry mix, and wet-only reverb (`val/audio_*`).
+- The resolved Hydra config appears in the Text tab under `config`.
+
+Resuming reuses the run's event directory and hides events at or beyond the
+checkpoint step before writing replacement data. `log.jsonl` remains append-only.
+Set `tensorboard.enabled=false` to disable TensorBoard events and audio previews
+while keeping JSONL metrics and checkpoints. `tensorboard.flush_secs=30` controls
+the background flush interval; closing the logger flushes pending events.
+
+The old `wandb.*` overrides are removed; drop `wandb.mode=online` from existing
+commands, or replace `wandb.mode=disabled` with `tensorboard.enabled=false`.
+Historical W&B runs are not converted. Hosted sharing, W&B's automatic system
+telemetry, and its config-comparison UI are not reproduced by this local logger.
+The W&B package is still an indirect dependency of the CLAP metrics package,
+but PolyDDSP no longer initializes a W&B run.
 
 ## Results
 
