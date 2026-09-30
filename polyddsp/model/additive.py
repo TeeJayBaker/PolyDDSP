@@ -117,7 +117,7 @@ class AdditiveSynth(nn.Module):
     Output: audio (B, T_samples) where T_samples = T_frames * frame_hop
 
     Single per-voice amplitude path matches DDSP's `ddsp.synths.Harmonic`.
-    `MonoDecoder` emits one `amp_v` per voice; `harm_dist` and `noise_mags` come
+    `VoiceDecoder` emits one `amp_v` per voice; `harm_dist` and `noise_mags` come
     from the same shared head — see `decoder.py`.
 
     ## Block rendering

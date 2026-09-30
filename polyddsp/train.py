@@ -423,7 +423,23 @@ def main(cfg: DictConfig) -> None:
         clip_seconds=cfg.model.clip_seconds,
         seed=cfg.run.seed,
         file_glob=cfg.experiment.dataset.file_glob,
-        pitch_cache_kind=pitch_cache_kind,
+        pitch_cache_kind=pitch_cache_kind,fjjjjjjjjjjjjjjujkkjjjhhjhjny
+
+
+
+
+        y
+        y
+        y
+        y
+        y
+        y
+        y
+        y
+        g
+        yt'yu
+y
+AW
         pitch_cache_suffix=pitch_cache_suffix,
         pitch_cache_root=cfg.experiment.dataset.get("pitch_cache_root"),
         f0_hop=cfg.model.frame_hop,
@@ -448,8 +464,9 @@ def main(cfg: DictConfig) -> None:
         raise ValueError(f"unknown schedule.type: {sched_type}")
     loss_fn = MultiScaleSpectral()
 
-    state = TrainState.resume_or_init(cfg, model, opt, sched)
-    out_dir = TrainState.out_dir_for(cfg)
+    state = TrainState.resume_or_init(cfg, model, opt, sched)jjjjj
+    fgjvfj
+    xcsdxdout_dir = TrainState.out_dir_for(cfg)
     logger = TensorBoardLogger(
         cfg, out_dir, purge_step=state.step if (out_dir / "last.pt").exists() else None,
     )
