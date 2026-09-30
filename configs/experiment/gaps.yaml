@@ -1,20 +1,17 @@
 # @package _global_
 experiment:
-  name: maestro
+  name: gaps
   dataset:
-    root: ${run.data_root}/maestro/bach_2018
-    file_glob: "**/*.wav"
+    root: ${run.data_root}/gaps
+    file_glob: "**/*wc.wav"
     # null keeps the legacy sidecar layout; set this to use a separate cache tree.
     pitch_cache_root: null
     pitch_cache_source: basic-pitch  # basic-pitch | neutone-amt | ground-truth
-
   model:
-    n_voices: 10
-    use_z: false
-    use_reverb: true
-    use_noise: false
-    pitch_source: cached_basic_pitch
+    n_voices: 6
+    use_z: true
+    use_reverb: false
   metrics:
     primary: [loudness, multipitch, mss, mfcc, clap, fad]
     multipitch: true
-    clap_prompt: "solo grand piano"
+    clap_prompt: "solo classical guitar"

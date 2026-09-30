@@ -197,7 +197,7 @@ class BasicPitchModel(nn.Module):
 def load_basic_pitch(weights: Optional[Path] = None) -> BasicPitchModel:
     model = BasicPitchModel()
     weights = weights or WEIGHTS_PATH
-    state = torch.load(weights, map_location="cpu")
+    state = torch.load(weights, map_location="cpu", weights_only=True)
     model.load_state_dict(state)
     model.eval()
     for p in model.parameters():
@@ -285,6 +285,10 @@ class PitchEncoder(nn.Module):
         written by `polyddsp/preprocess.py`, which runs the identical pipeline
         once per whole file, so it sees note context across crop boundaries.
 
+    Explicit pitch and velocity hints take precedence for either source. This
+    lets inference transcribe the input live with a caller-selected model and
+    pass the resulting tensors directly, without reading a cache file.
+
     Both sources return an empty `bp_post` dict; the key is retained because
     `polyddsp.py` forwards it.
     """
@@ -321,7 +325,8 @@ class PitchEncoder(nn.Module):
         pitch_hint: torch.Tensor | None = None,
         velocity_hint: torch.Tensor | None = None,
     ) -> dict[str, torch.Tensor]:
-        if self.source in self._CACHED_SOURCES:
+        if (pitch_hint is not None or velocity_hint is not None
+                or self.source in self._CACHED_SOURCES):
             return self._forward_cached(audio, pitch_hint, velocity_hint)
         return self._forward_basic_pitch(audio)
 
@@ -336,7 +341,7 @@ class PitchEncoder(nn.Module):
             raise RuntimeError(
                 f"PitchEncoder(source={self.source!r}) requires pitch_hint and velocity_hint; "
                 "the dataset must return a dict with 'pitch' and 'velocity' (precompute via "
-                "`python -m polyddsp.preprocess --n-voices N`)"
+                "`polyddsp-preprocess experiment=<name>`)"
             )
         pitch = pitch_hint[..., :target_frames].to(device=audio.device, dtype=torch.float32)
         velocity = velocity_hint[..., :target_frames].to(device=audio.device, dtype=torch.float32)

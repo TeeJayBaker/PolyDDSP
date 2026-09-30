@@ -16,6 +16,7 @@ from omegaconf import DictConfig, OmegaConf
 from torch.optim import Adam, AdamW
 from torch.optim.lr_scheduler import CosineAnnealingWarmRestarts, ExponentialLR
 from torch.utils.data import DataLoader
+from tqdm.auto import tqdm
 
 from polyddsp.data import RawAudioDataset
 from polyddsp.losses import MultiScaleSpectral
@@ -118,7 +119,7 @@ class TrainState:
         last = out_dir / "last.pt"
         state = cls()
         if last.exists():
-            ckpt = torch.load(last, map_location="cpu")
+            ckpt = torch.load(last, map_location="cpu", weights_only=True)
             model.load_state_dict(ckpt["model"])
             opt.load_state_dict(ckpt["opt"])
             sched.load_state_dict(ckpt["sched"])
@@ -296,7 +297,13 @@ def _evaluate_cheap(model, val_loader, sr: int, primary: list[str]) -> dict[str,
     model.eval()
     device = next(model.parameters()).device
     with torch.no_grad():
-        for batch in val_loader:
+        for batch in tqdm(
+            val_loader,
+            desc="validation",
+            unit="batch",
+            leave=False,
+            dynamic_ncols=True,
+        ):
             audio, model_kwargs = _unwrap(batch)
             audio = audio.to(device)
             for k, v in model_kwargs.items():
@@ -339,7 +346,13 @@ def _evaluate_full(
 
     with torch.no_grad():
         for li, loader in enumerate(loaders):
-            for batch in loader:
+            for batch in tqdm(
+                loader,
+                desc=f"full eval {li + 1}/{len(loaders)}",
+                unit="batch",
+                leave=False,
+                dynamic_ncols=True,
+            ):
                 audio, model_kwargs = _unwrap(batch)
                 audio = audio.to(device)
                 for k, v in model_kwargs.items():
@@ -376,7 +389,9 @@ def main(cfg: DictConfig) -> None:
     set_seed(cfg.run.seed)
     device = "cuda" if torch.cuda.is_available() else "cpu"
 
-    pitch_cache_kind, pitch_cache_suffix, n_voices_for_cache = resolve_pitch_cache(cfg)
+    pitch_cache_kind, pitch_cache_suffix, n_voices_for_cache = resolve_pitch_cache(
+        cfg, source=cfg.experiment.dataset.get("pitch_cache_source", "basic-pitch"),
+    )
 
     train_ds = RawAudioDataset(
         root=cfg.experiment.dataset.root,
@@ -387,6 +402,7 @@ def main(cfg: DictConfig) -> None:
         file_glob=cfg.experiment.dataset.file_glob,
         pitch_cache_kind=pitch_cache_kind,
         pitch_cache_suffix=pitch_cache_suffix,
+        pitch_cache_root=cfg.experiment.dataset.get("pitch_cache_root"),
         f0_hop=cfg.model.frame_hop,
         n_voices=n_voices_for_cache,
     )
@@ -399,6 +415,7 @@ def main(cfg: DictConfig) -> None:
         file_glob=cfg.experiment.dataset.file_glob,
         pitch_cache_kind=pitch_cache_kind,
         pitch_cache_suffix=pitch_cache_suffix,
+        pitch_cache_root=cfg.experiment.dataset.get("pitch_cache_root"),
         f0_hop=cfg.model.frame_hop,
         n_voices=n_voices_for_cache,
     )
@@ -454,6 +471,13 @@ def main(cfg: DictConfig) -> None:
         logger.log_metrics(state.step, step0_metrics, prefix="val/")
         logger.log_audio_sample(state.step, model, val_loader)
 
+    progress = tqdm(
+        total=cfg.train.steps,
+        initial=min(state.step, cfg.train.steps),
+        desc=f"train {cfg.experiment.name}",
+        unit="step",
+        dynamic_ncols=True,
+    )
     try:
         for batch in _infinite(train_loader):
             loss = train_step(model, batch, loss_fn, opt, sched, grad_clip=cfg.train.grad_clip)
@@ -462,6 +486,7 @@ def main(cfg: DictConfig) -> None:
             # `train.log_every` so the GPU stays pipelined.
             if state.step % cfg.train.log_every == 0:
                 logger.log_step(state.step, loss)
+                progress.set_postfix(loss=f"{loss.item():.4f}")
 
             if state.step > 0 and state.step % cfg.train.eval_cheap_every == 0:
                 metrics = _evaluate_cheap(model, val_loader, cfg.model.sr, primary)
@@ -484,9 +509,11 @@ def main(cfg: DictConfig) -> None:
                     torch.cuda.empty_cache()
 
             state.step += 1
+            progress.update(1)
             if state.step >= cfg.train.steps:
                 break
     finally:
+        progress.close()
         state.save(out_dir / "last.pt", model, opt, sched)
         # Always log a final full eval on the last checkpoint so CLAP/FAD aren't
         # tied solely to the eval_full_every cadence.

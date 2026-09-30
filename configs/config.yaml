@@ -1,5 +1,7 @@
 defaults:
   - experiment: guitarset
+  - override hydra/job_logging: stdout
+  - _self_
 
 ckpt: null  # set on the eval CLI: `ckpt=outputs/<run>/best.pt`
 
@@ -11,8 +13,14 @@ run:
   fresh: false
 
 hydra:
+  # Do not let Hydra eagerly create a timestamped directory before `main()`.
+  # `TrainState.resume_or_init` creates `run.out_dir` after the dataset/cache
+  # checks and model construction have succeeded.
   run:
-    dir: ${run.out_dir}
+    dir: .
+  output_subdir: null
+  job:
+    chdir: false
 
 model:
   sr: 16000
