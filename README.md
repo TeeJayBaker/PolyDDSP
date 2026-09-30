@@ -157,6 +157,8 @@ compute.
   `configs/experiment/*.yaml`); any key can be overridden on the CLI, e.g.
   `train.batch_size=8`. Checkpoints, the resolved config, `log.jsonl` and metric
   summaries go to `$POLYDDSP_OUT_DIR/<run.name>/` (default: `outputs/<run.name>/`).
+  Default run names use `experiment_YYMMDDTHHmm_pitch-cache-source`, for example
+  `guitarset_260930T0915_neutone-amt`.
 
 ### Training logs
 

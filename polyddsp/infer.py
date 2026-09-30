@@ -16,7 +16,7 @@ point this at any audio file. The usual `--key value` spelling shown above and
    authoritative. Composing defaults from `configs/` would silently rebuild a
    different architecture than the checkpoint was trained with unless every
    override were retyped on the CLI.
-3. A saved run config can contain `${now:%Y%m%d_%H%M%S}` in `run.name`, a
+3. A saved run config can contain `${now:%y%m%dT%H%M}` in `run.name`, a
    resolver that only exists inside a Hydra app. So never call
    `OmegaConf.to_container(cfg, resolve=True)` on a loaded run config.
    `PolyDDSP.from_cfg` only reads non-interpolating keys, which is why passing

@@ -123,6 +123,7 @@ class PolyDDSP(nn.Module):
         velocity: torch.Tensor,
         loudness: torch.Tensor,
         z: torch.Tensor | None,
+        z_scale: float | None = 1.0,
     ) -> tuple[torch.Tensor, dict]:
         """Decoder and synthesisers for a block of frames, before reverb.
 
@@ -147,7 +148,9 @@ class PolyDDSP(nn.Module):
         # Synth always sees raw f0 in Hz so harmonic frequencies are correct.
         pitch_for_decoder = scale_f0_hz(pitch)
 
-        harm_dist, amp_v, noise_mags = self.decoder(pitch_for_decoder, velocity, loudness, z)
+        harm_dist, amp_v, noise_mags = self.decoder(
+            pitch_for_decoder, velocity, loudness, z, z_scale,
+        )
 
         # Per-voice harmonic synth (already vectorised across V).
         audio_harm = self.additive(pitch=pitch, harm_dist=harm_dist, amp_v=amp_v)

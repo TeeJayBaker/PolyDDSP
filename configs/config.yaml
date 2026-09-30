@@ -6,7 +6,7 @@ defaults:
 ckpt: null  # set on the eval CLI: `ckpt=outputs/<run>/best.pt`
 
 run:
-  name: ${experiment.name}_${now:%Y%m%d_%H%M%S}
+  name: ${experiment.name}_${now:%y%m%dT%H%M}_${experiment.dataset.pitch_cache_source}
   seed: 0
   out_dir: ${oc.env:POLYDDSP_OUT_DIR,outputs}/${run.name}
   data_root: ${oc.env:POLYDDSP_DATA_DIR,/data/polyddsp}

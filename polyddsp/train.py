@@ -100,8 +100,12 @@ class TrainState:
         # If a prior dir matching this experiment exists, reuse the most recent.
         parent = Path(cfg.run.out_dir).parent
         prefix = cfg.experiment.name + "_"
+        suffix = "_" + cfg.experiment.dataset.pitch_cache_source
         if parent.exists():
-            candidates = sorted([p for p in parent.iterdir() if p.is_dir() and p.name.startswith(prefix)])
+            candidates = sorted([
+                p for p in parent.iterdir()
+                if p.is_dir() and p.name.startswith(prefix) and p.name.endswith(suffix)
+            ])
             if candidates:
                 return candidates[-1]
         return Path(cfg.run.out_dir)
@@ -423,23 +427,7 @@ def main(cfg: DictConfig) -> None:
         clip_seconds=cfg.model.clip_seconds,
         seed=cfg.run.seed,
         file_glob=cfg.experiment.dataset.file_glob,
-        pitch_cache_kind=pitch_cache_kind,fjjjjjjjjjjjjjjujkkjjjhhjhjny
-
-
-
-
-        y
-        y
-        y
-        y
-        y
-        y
-        y
-        y
-        g
-        yt'yu
-y
-AW
+        pitch_cache_kind=pitch_cache_kind,
         pitch_cache_suffix=pitch_cache_suffix,
         pitch_cache_root=cfg.experiment.dataset.get("pitch_cache_root"),
         f0_hop=cfg.model.frame_hop,
@@ -464,9 +452,8 @@ AW
         raise ValueError(f"unknown schedule.type: {sched_type}")
     loss_fn = MultiScaleSpectral()
 
-    state = TrainState.resume_or_init(cfg, model, opt, sched)jjjjj
-    fgjvfj
-    xcsdxdout_dir = TrainState.out_dir_for(cfg)
+    state = TrainState.resume_or_init(cfg, model, opt, sched)
+    out_dir = TrainState.out_dir_for(cfg)
     logger = TensorBoardLogger(
         cfg, out_dir, purge_step=state.step if (out_dir / "last.pt").exists() else None,
     )
