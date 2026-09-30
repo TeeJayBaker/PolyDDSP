@@ -390,7 +390,7 @@ def main(cfg: DictConfig) -> None:
     device = "cuda" if torch.cuda.is_available() else "cpu"
 
     pitch_cache_kind, pitch_cache_suffix, n_voices_for_cache = resolve_pitch_cache(
-        cfg, backend=cfg.experiment.dataset.get("pitch_cache_backend", "basic_pitch"),
+        cfg, source=cfg.experiment.dataset.get("pitch_cache_source", "basic-pitch"),
     )
 
     train_ds = RawAudioDataset(

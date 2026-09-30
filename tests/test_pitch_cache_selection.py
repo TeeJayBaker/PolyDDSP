@@ -16,18 +16,23 @@ from polyddsp.preprocess import (
 
 
 @pytest.mark.parametrize("experiment", ["guitarset", "maestro"])
-@pytest.mark.parametrize("backend,prefix", [("basic_pitch", "bp"), ("neutone", "neutone")])
-def test_config_selects_cache_for_training_and_validation(tmp_path, experiment, backend, prefix):
+@pytest.mark.parametrize(
+    "source,expected_kind,prefix",
+    [("basic-pitch", "basic_pitch", "bp"), ("neutone-amt", "neutone", "neutone")],
+)
+def test_config_selects_cache_for_training_and_validation(
+    tmp_path, experiment, source, expected_kind, prefix,
+):
     config_dir = Path(__file__).resolve().parents[1] / "configs"
     with initialize_config_dir(version_base=None, config_dir=str(config_dir)):
         cfg = compose(config_name="config", overrides=[
             f"experiment={experiment}",
-            f"experiment.dataset.pitch_cache_backend={backend}",
+            f"experiment.dataset.pitch_cache_source={source}",
         ])
     kind, suffix, voices = resolve_pitch_cache(
-        cfg, backend=cfg.experiment.dataset.pitch_cache_backend,
+        cfg, source=cfg.experiment.dataset.pitch_cache_source,
     )
-    assert kind == backend
+    assert kind == expected_kind
     assert suffix == f"{prefix}_v{voices}_sr16000_hop64"
 
     root, cache_root = tmp_path / "audio", tmp_path / "cache"
@@ -62,10 +67,10 @@ def test_legacy_config_defaults_to_basic_pitch():
         "model": {"sr": 16000, "frame_hop": 64},
     })
     assert resolve_pitch_cache(cfg) == ("basic_pitch", "bp_v6_sr16000_hop64", 6)
-    with pytest.raises(ValueError, match="Unknown pitch cache backend"):
-        resolve_pitch_cache(cfg, backend="typo")
+    with pytest.raises(ValueError, match="Unknown pitch cache source"):
+        resolve_pitch_cache(cfg, source="typo")
     cfg.experiment.model.pitch_source = "basic_pitch"
-    assert resolve_pitch_cache(cfg, backend="neutone") == (None, None, None)
+    assert resolve_pitch_cache(cfg, source="neutone-amt") == (None, None, None)
 
 
 @pytest.mark.parametrize("experiment,voices,file_glob", [
@@ -82,7 +87,7 @@ def test_preprocess_hydra_config_uses_experiment_values(tmp_path, experiment, vo
             f"experiment={experiment}",
             f"experiment.dataset.root={audio_root}",
             f"output_dir={cache_root}",
-            "model=neutone_amt",
+            "model=neutone-amt",
             f"model_path={model_path}",
             "device=cpu",
             "parallel=true",
@@ -112,8 +117,8 @@ def test_preprocess_hydra_config_uses_experiment_values(tmp_path, experiment, vo
     cfg.n_voices = 3
     cfg.sample_rate = 22050
     cfg.hop = 128
-    cfg.model = "basic_pitch"
-    cfg.experiment.dataset.pitch_cache_backend = "neutone"
+    cfg.model = "basic-pitch"
+    cfg.experiment.dataset.pitch_cache_source = "neutone-amt"
     overridden = preprocess_options_from_cfg(cfg)
     assert overridden.root == tmp_path / "other-audio"
     assert overridden.file_glob == "**/*.flac"

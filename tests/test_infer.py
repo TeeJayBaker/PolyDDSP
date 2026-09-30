@@ -9,7 +9,8 @@ import soundfile as sf
 import torch
 from omegaconf import OmegaConf
 
-from polyddsp.infer import _normalise_argv, main
+from polyddsp import preprocess
+from polyddsp.infer import _normalise_argv, main, pitch_features
 from polyddsp.model.additive import AdditiveSynth
 from polyddsp.model.parity_ops import scale_f0_hz
 from polyddsp.model.polyddsp import PolyDDSP
@@ -79,6 +80,83 @@ def test_normalise_argv_accepts_both_spellings() -> None:
         "--out", "y.wav", "--device", "cuda:0",
     ]
     assert _normalise_argv(["out=a=b.wav"]) == ["--out", "a=b.wav"]
+
+
+def test_main_passes_pitch_encoder_options(monkeypatch: pytest.MonkeyPatch) -> None:
+    captured = {}
+
+    def fake_render_file(**kwargs):  # type: ignore[no-untyped-def]
+        captured.update(kwargs)
+
+    monkeypatch.setattr("polyddsp.infer.render_file", fake_render_file)
+    main([
+        "--ckpt", "run/best.pt", "--input", "in.wav", "--out", "out.wav",
+        "--pitch-encoder", "neutone-amt",
+        "--pitch-encoder-checkpoint", "amt.onnx",
+    ])
+
+    assert captured["pitch_encoder"] == "neutone-amt"
+    assert captured["pitch_encoder_checkpoint"] == "amt.onnx"
+
+
+def test_neutone_pitch_features_use_shared_preprocess_path(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path,
+) -> None:
+    model_path = tmp_path / "amt.onnx"
+    model_path.touch()
+    cfg = OmegaConf.create({
+        "model": {"sr": SR, "frame_hop": HOP},
+        "experiment": {"model": {
+            "n_voices": V,
+        }},
+    })
+
+    class FakeAMT:
+        spec = type("Spec", (), {"sample_rate": 44_100})()
+        max_input_samples = None
+
+    amt_model = FakeAMT()
+    calls = {}
+
+    def fake_load(path, device):  # type: ignore[no-untyped-def]
+        calls["load"] = (path, device)
+        return amt_model
+
+    def fake_transcribe(audio_path, **kwargs):  # type: ignore[no-untyped-def]
+        calls["transcribe"] = (audio_path, kwargs)
+        shape = (kwargs["n_voices"], kwargs["target_frames"])
+        return torch.full(shape, 220.0), torch.full(shape, 0.5)
+
+    monkeypatch.setattr(preprocess, "load_neutone_amt_model", fake_load)
+    monkeypatch.setattr(preprocess, "neutone_amt_to_voices", fake_transcribe)
+
+    feats = pitch_features(
+        tmp_path / "in.wav",
+        cfg,
+        target_frames=17,
+        device="cpu",
+        pitch_encoder="neutone-amt",
+        pitch_encoder_checkpoint=model_path,
+    )
+
+    assert calls["load"] == (model_path, "cpu")
+    _, kwargs = calls["transcribe"]
+    assert kwargs["sample_rate"] == SR
+    assert kwargs["target_hop"] == HOP
+    assert kwargs["model"] is amt_model
+    assert feats["pitch"].shape == (1, V, 17)
+    assert torch.all(feats["velocity"] == 0.5)
+
+
+def test_neutone_pitch_features_require_encoder_checkpoint() -> None:
+    cfg = OmegaConf.create({
+        "model": {"sr": SR, "frame_hop": HOP},
+        "experiment": {"model": {
+            "n_voices": V,
+        }},
+    })
+    with pytest.raises(SystemExit, match="pitch-encoder-checkpoint is required"):
+        pitch_features("in.wav", cfg, 10, pitch_encoder="neutone-amt")
 
 
 def test_render_single_block_matches_forward() -> None:

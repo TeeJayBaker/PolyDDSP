@@ -116,7 +116,7 @@ class RawAudioDataset(Dataset):
                 preprocess_cmd = (
                     f"polyddsp-preprocess data_root={self.root} "
                     f"file_glob='{file_glob}' "
-                    f"model={'neutone_amt' if pitch_cache_kind == 'neutone' else 'basic_pitch'} "
+                    f"model={'neutone-amt' if pitch_cache_kind == 'neutone' else 'basic-pitch'} "
                     f"n_voices={n_voices} "
                     f"sample_rate={sample_rate} hop={f0_hop}"
                 )

@@ -10,7 +10,7 @@ beneath that directory. Idempotent: skips caches newer than their source audio.
 Usage:
     polyddsp-preprocess experiment=guitarset
     polyddsp-preprocess experiment=maestro \
-        model=neutone_amt \
+        model=neutone-amt \
         model_path=/path/to/amt.onnx parallel=true
 
 Basic Pitch transcription lives in
@@ -69,9 +69,9 @@ class PreprocessOptions:
 def preprocess_options_from_cfg(cfg: DictConfig) -> PreprocessOptions:
     """Resolve shared experiment settings without passing Hydra into workers."""
     execution = cfg
-    backends = {"basic_pitch": "basic_pitch", "neutone_amt": "neutone"}
+    backends = {"basic-pitch": "basic_pitch", "neutone-amt": "neutone"}
     if execution.model not in backends:
-        raise ValueError("model must be basic_pitch or neutone_amt")
+        raise ValueError("model must be basic-pitch or neutone-amt")
     device = str(execution.device)
     if device == "auto":
         device = "cuda" if torch.cuda.is_available() else "cpu"
@@ -126,7 +126,7 @@ def validate_preprocess_options(options: PreprocessOptions) -> None:
             )
     if options.backend == "neutone" and options.model_path is None:
         raise ValueError(
-            "model_path is required when model=neutone_amt"
+            "model_path is required when model=neutone-amt"
         )
     if options.backend == "neutone" and options.model_path is not None:
         if options.model_path.suffix.lower() == ".data":
@@ -191,7 +191,7 @@ def neutone_cache_suffix(n_voices: int, sample_rate: int, target_hop: int) -> st
 
 
 def resolve_pitch_cache(
-    cfg, backend: str = "basic_pitch",
+    cfg, source: str = "basic-pitch",
 ) -> tuple[str | None, str | None, int | None]:
     """Map a Hydra config to `RawAudioDataset`'s (kind, suffix, n_voices) cache args.
 
@@ -200,17 +200,18 @@ def resolve_pitch_cache(
     """
     if cfg.experiment.model.get("pitch_source") != "cached_basic_pitch":
         return None, None, None
-    suffix_for_backend = {
-        "basic_pitch": bp_cache_suffix,
-        "neutone": neutone_cache_suffix,
+    cache_for_source = {
+        "basic-pitch": ("basic_pitch", bp_cache_suffix),
+        "neutone-amt": ("neutone", neutone_cache_suffix),
     }
-    if backend not in suffix_for_backend:
+    if source not in cache_for_source:
         raise ValueError(
-            f"Unknown pitch cache backend {backend!r}; expected basic_pitch or neutone"
+            f"Unknown pitch cache source {source!r}; expected basic-pitch or neutone-amt"
         )
+    cache_kind, suffix_fn = cache_for_source[source]
     n_voices = cfg.experiment.model.n_voices
-    suffix = suffix_for_backend[backend](n_voices, cfg.model.sr, cfg.model.frame_hop)
-    return backend, suffix, n_voices
+    suffix = suffix_fn(n_voices, cfg.model.sr, cfg.model.frame_hop)
+    return cache_kind, suffix, n_voices
 
 
 def precompute_one_bp(
@@ -281,7 +282,7 @@ def audio_within_duration_limit(
 
 
 @torch.no_grad()
-def precompute_one_neutone_amt(
+def neutone_amt_to_voices(
     audio_path: Path,
     sample_rate: int,
     target_hop: int,
@@ -290,29 +291,19 @@ def precompute_one_neutone_amt(
     model: "AMTModel | NeutoneONNXModel",
     min_freq: float | None = None,
     max_freq: float | None = None,
-    root: Path | None = None,
-    output_dir: Path | None = None,
-) -> tuple[Path, bool]:
-    """Cache neutoneAMT notes as PolyDDSP pitch and constant-velocity tracks."""
-    suffix = neutone_cache_suffix(n_voices, sample_rate, target_hop)
-    cache = cache_path_for(audio_path, suffix, root=root, output_dir=output_dir)
-    if cache.exists() and cache.stat().st_mtime > audio_path.stat().st_mtime:
-        return cache, False
-
+    target_frames: int | None = None,
+) -> tuple[torch.Tensor, torch.Tensor]:
+    """Transcribe one file with Neutone AMT into PolyDDSP voice tracks."""
     native_sr = int(getattr(model.spec, "sample_rate", getattr(model.spec, "sr", NEUTONE_NATIVE_SR)))
-    if not audio_within_duration_limit(
-        audio_path, max_samples=getattr(model, "max_input_samples", None), sample_rate=native_sr,
-    ):
-        return cache, False
-
     from neutone_amt.model import select_delay, unshift_predictions
     from neutone_amt.pianoroll import pianoroll_to_midi
     from polyddsp.model.note_extraction import NoteEvent
     from polyddsp.model.voice_allocation import allocate_to_voices
 
     audio_amt = load_resample(audio_path, native_sr).to(getattr(model, "input_device", device))
-    target_samples = int(round(audio_amt.shape[-1] * sample_rate / native_sr))
-    target_frames = target_samples // target_hop
+    if target_frames is None:
+        target_samples = int(round(audio_amt.shape[-1] * sample_rate / native_sr))
+        target_frames = target_samples // target_hop
 
     outputs = model(audio_amt.unsqueeze(0))
     delays = list(getattr(model, "delays", []) or [])
@@ -354,8 +345,60 @@ def precompute_one_neutone_amt(
     pitch, velocity = allocate_to_voices(
         events, velocity_grid, n_voices, target_frames, bp_to_target_ratio=1.0,
     )
+    return pitch, velocity
+
+
+@torch.no_grad()
+def precompute_one_neutone_amt(
+    audio_path: Path,
+    sample_rate: int,
+    target_hop: int,
+    n_voices: int,
+    device: str,
+    model: "AMTModel | NeutoneONNXModel",
+    min_freq: float | None = None,
+    max_freq: float | None = None,
+    root: Path | None = None,
+    output_dir: Path | None = None,
+) -> tuple[Path, bool]:
+    """Cache neutoneAMT notes as PolyDDSP pitch and constant-velocity tracks."""
+    suffix = neutone_cache_suffix(n_voices, sample_rate, target_hop)
+    cache = cache_path_for(audio_path, suffix, root=root, output_dir=output_dir)
+    if cache.exists() and cache.stat().st_mtime > audio_path.stat().st_mtime:
+        return cache, False
+
+    native_sr = int(getattr(model.spec, "sample_rate", getattr(model.spec, "sr", NEUTONE_NATIVE_SR)))
+    if not audio_within_duration_limit(
+        audio_path, max_samples=getattr(model, "max_input_samples", None), sample_rate=native_sr,
+    ):
+        return cache, False
+
+    pitch, velocity = neutone_amt_to_voices(
+        audio_path,
+        sample_rate,
+        target_hop,
+        n_voices,
+        device,
+        model,
+        min_freq=min_freq,
+        max_freq=max_freq,
+    )
     _save_pitch_cache(cache, pitch, velocity)
     return cache, True
+
+
+def load_neutone_amt_model(
+    model_path: str | Path, device: str, *, num_threads: int | None = None,
+):
+    """Load a Neutone AMT Lightning checkpoint or ONNX export."""
+    model_path = Path(model_path)
+    if model_path.suffix.lower() == ".onnx":
+        from polyddsp.model.neutone_onnx import NeutoneONNXModel
+        return NeutoneONNXModel(model_path, device, num_threads=num_threads)
+    from neutone_amt.model import AMTModel
+    return AMTModel.load_from_checkpoint(
+        model_path, map_location=device, strict=False, weights_only=False,
+    ).to(device).eval()
 
 
 def _load_pitch_model(
@@ -365,13 +408,7 @@ def _load_pitch_model(
         from polyddsp.model.pitch import load_basic_pitch
         return load_basic_pitch().to(device)
     assert options.model_path is not None
-    if options.model_path.suffix.lower() == ".onnx":
-        from polyddsp.model.neutone_onnx import NeutoneONNXModel
-        return NeutoneONNXModel(options.model_path, device, num_threads=num_threads)
-    from neutone_amt.model import AMTModel
-    return AMTModel.load_from_checkpoint(
-        options.model_path, map_location=device, strict=False, weights_only=False,
-    ).to(device).eval()
+    return load_neutone_amt_model(options.model_path, device, num_threads=num_threads)
 
 
 def _precompute_file(

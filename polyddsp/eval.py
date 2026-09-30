@@ -91,7 +91,7 @@ def main(cfg: DictConfig) -> None:
         model.load_state_dict(state["model"])
 
     pitch_cache_kind, pitch_cache_suffix, n_voices_for_cache = resolve_pitch_cache(
-        cfg, backend=cfg.experiment.dataset.get("pitch_cache_backend", "basic_pitch"),
+        cfg, source=cfg.experiment.dataset.get("pitch_cache_source", "basic-pitch"),
     )
 
     val_ds = RawAudioDataset(

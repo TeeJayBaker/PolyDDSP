@@ -9,7 +9,7 @@ run:
 data_root: ${experiment.dataset.root}
 file_glob: ${experiment.dataset.file_glob}
 n_voices: ${experiment.model.n_voices}
-model: basic_pitch     # basic_pitch | neutone_amt
+model: basic-pitch     # basic-pitch | neutone-amt
 model_path: null       # Neutone Lightning checkpoint or ONNX export
 output_dir: null       # null writes beside source audio; otherwise mirrors dataset paths here
 sample_rate: 16000

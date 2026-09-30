@@ -285,6 +285,10 @@ class PitchEncoder(nn.Module):
         written by `polyddsp/preprocess.py`, which runs the identical pipeline
         once per whole file, so it sees note context across crop boundaries.
 
+    Explicit pitch and velocity hints take precedence for either source. This
+    lets inference transcribe the input live with a caller-selected model and
+    pass the resulting tensors directly, without reading a cache file.
+
     Both sources return an empty `bp_post` dict; the key is retained because
     `polyddsp.py` forwards it.
     """
@@ -321,7 +325,8 @@ class PitchEncoder(nn.Module):
         pitch_hint: torch.Tensor | None = None,
         velocity_hint: torch.Tensor | None = None,
     ) -> dict[str, torch.Tensor]:
-        if self.source in self._CACHED_SOURCES:
+        if (pitch_hint is not None or velocity_hint is not None
+                or self.source in self._CACHED_SOURCES):
             return self._forward_cached(audio, pitch_hint, velocity_hint)
         return self._forward_basic_pitch(audio)
 

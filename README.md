@@ -54,8 +54,22 @@ polyddsp-train experiment=guitarset
 python -m polyddsp.eval experiment=guitarset ckpt=outputs/<run>/best.pt
 
 # 4. Render audio from a checkpoint
-polyddsp-infer ckpt=outputs/<run>/best.pt input=clip.wav out=resynth.wav
+polyddsp-infer --ckpt outputs/<run>/best.pt --input clip.wav --out resynth.wav
 ```
+
+Inference uses Basic Pitch by default. To transcribe with Neutone AMT instead,
+select it and provide the same kind of Lightning checkpoint or ONNX export used
+by preprocessing:
+
+```bash
+polyddsp-infer --ckpt outputs/<run>/best.pt --input clip.wav --out resynth.wav \
+    --pitch-encoder neutone-amt \
+    --pitch-encoder-checkpoint ./checkpoints/NeutoneAMT/amt.onnx
+```
+
+`basic-pitch` and `neutone-amt` both transcribe in-process and do
+not read or write a pitch-cache sidecar. The live transcription is passed
+directly to PolyDDSP regardless of the checkpoint's configured pitch source.
 
 By default preprocessing writes each cache beside its source audio. To keep the
 dataset untouched, add `output_dir=preprocessed/guitarset`. When
@@ -70,7 +84,7 @@ To preprocess with Neutone AMT, pass a Lightning checkpoint or an ONNX export:
 polyddsp-preprocess experiment=guitarset \
     data_root=/media/ssd2/data/guitarset/audio_mono-pickup_mix \
     output_dir=./data/neutone-amt/guitarset \
-    model=neutone_amt \
+    model=neutone-amt \
     model_path=./checkpoints/NeutoneAMT/amt.onnx
 ```
 
@@ -98,11 +112,11 @@ To train using these Neutone caches:
 polyddsp-train experiment=guitarset \
     experiment.dataset.root=/media/ssd2/data/guitarset/audio_mono-pickup_mix \
     experiment.dataset.pitch_cache_root=./data/neutone-amt/guitarset \
-    experiment.dataset.pitch_cache_backend=neutone
+    experiment.dataset.pitch_cache_source=neutone-amt
 ```
 
-Pass the same dataset overrides when evaluating. `pitch_cache_backend` defaults
-to `basic_pitch`; selecting `neutone` uses the `neutone_v6_sr16000_hop64` suffix
+Pass the same dataset overrides when evaluating. `pitch_cache_source` defaults
+to `basic-pitch`; selecting `neutone-amt` uses the `neutone_v6_sr16000_hop64` suffix
 for this configuration. Both use the existing `cached_basic_pitch` pitch source,
 which reads the shared pitch/velocity tensor format.
 
@@ -129,15 +143,16 @@ compute.
 - `configs/preprocess.yaml` owns preprocessing settings. Only `data_root`,
   `file_glob`, and `n_voices` default to values from the
   selected experiment; each can also be overridden directly. Select the pitch
-  model with `model=basic_pitch` or `model=neutone_amt`.
+  model with `model=basic-pitch` or `model=neutone-amt`.
   Set `sample_rate` and `hop` to match the training model's
   `model.sr` and `model.frame_hop`, and match the voice count too. Training's
-  `experiment.dataset.pitch_cache_backend` selects which generated cache to
-  read (`basic_pitch` or `neutone`); its `pitch_cache_root` points to the
+  `experiment.dataset.pitch_cache_source` selects which generated cache to
+  read (`basic-pitch` or `neutone-amt`); its `pitch_cache_root` points to the
   preprocessing output directory when using separate cache storage.
 - The cache is a per-file `.bp_v{V}_sr16000_hop64.f0.pt` sidecar, and is skipped
   if newer than its audio.
-- `infer` transcribes in-process, so it needs no cache and takes any audio file.
+- `infer` transcribes in-process with `--pitch-encoder basic-pitch` (the default)
+  or `--pitch-encoder neutone-amt`, so it needs no cache and takes any audio file.
 - Config is Hydra (`configs/config.yaml`, `configs/preprocess.yaml`, and
   `configs/experiment/*.yaml`); any key can be overridden on the CLI, e.g.
   `train.batch_size=8`. Checkpoints, the resolved config, `log.jsonl` and metric

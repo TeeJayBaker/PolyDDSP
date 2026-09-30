@@ -6,12 +6,11 @@ experiment:
     file_glob: "**/*wc.wav"
     # null keeps the legacy sidecar layout; set this to use a separate cache tree.
     pitch_cache_root: null
-    pitch_cache_backend: basic_pitch  # basic_pitch or neutone
+    pitch_cache_source: basic-pitch  # basic-pitch | neutone-amt | ground-truth
   model:
     n_voices: 6
     use_z: true
     use_reverb: false
-    pitch_source: cached_basic_pitch
   metrics:
     primary: [loudness, multipitch, mss, mfcc, clap, fad]
     multipitch: true

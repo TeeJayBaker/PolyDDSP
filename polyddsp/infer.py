@@ -1,10 +1,11 @@
 """Render audio from a trained checkpoint: file in, resynthesised file out.
 
-    python -m polyddsp.infer ckpt=<run>/best.pt input=x.wav out=y.wav [device=cuda]
+    polyddsp-infer --ckpt <run>/best.pt --input x.wav --out y.wav \
+        [--pitch-encoder basic-pitch]
 
-Basic Pitch runs in-process, so there is no precompute step — point this at any
-audio file. Both `key=value` (shown above, and in the README) and the usual
-`--key value` spellings work; see `_normalise_argv`.
+The selected pitch encoder runs in-process, so there is no precompute step —
+point this at any audio file. The usual `--key value` spelling shown above and
+`key=value` are both accepted; see `_normalise_argv`.
 
 **Why argparse and not Hydra**, unlike `train.py` / `eval.py`:
 
@@ -34,7 +35,7 @@ from omegaconf import DictConfig, OmegaConf
 from polyddsp.model.polyddsp import PolyDDSP
 from polyddsp.preprocess import load_resample
 
-_LIVE_BP_SOURCES = ("cached_basic_pitch", "basic_pitch")
+_PITCH_ENCODERS = ("basic-pitch", "neutone-amt")
 
 
 def _normalise_argv(argv: list[str]) -> list[str]:
@@ -94,36 +95,75 @@ def pitch_features(
     cfg: DictConfig,
     target_frames: int,
     device: str = "cpu",
+    pitch_encoder: str = "basic-pitch",
+    pitch_encoder_checkpoint: str | Path | None = None,
 ) -> dict[str, torch.Tensor]:
     """Transcribe `audio_path` to per-voice `{pitch, velocity}` conditioning.
 
-    Runs Basic Pitch in-process via `polyddsp.model.pitch.basic_pitch_to_voices`
-    — the same function that writes the training cache — so inference needs no
-    `.f0.pt` sidecar and never reads one.
-
-    The file is loaded *directly* at `BP_NATIVE_SR` (22 050 Hz) rather than
-    resampled up from the model's rate: 16 kHz → 22.05 kHz would throw away the
-    band above 8 kHz that BP's CQT reaches, and the training cache was built from
-    the 22.05 kHz load. Matching it here is what makes infer-time pitch agree
-    with training.
+    Uses the same Basic Pitch or Neutone AMT transcription path as preprocessing,
+    but returns the tensors directly instead of writing a cache sidecar.
 
     Returns `{"pitch": (1, V, target_frames), "velocity": (1, V, target_frames)}`.
     """
-    from polyddsp.model.pitch import BP_NATIVE_SR, basic_pitch_to_voices
+    if pitch_encoder == "basic-pitch":
+        from polyddsp.model.pitch import BP_NATIVE_SR, basic_pitch_to_voices
 
-    source = cfg.experiment.model.get("pitch_source", "basic_pitch")
-    if source not in _LIVE_BP_SOURCES:
-        raise SystemExit(
-            f"pitch_source={source!r} is not supported by polyddsp.infer; "
-            f"expected one of {_LIVE_BP_SOURCES}"
+        # Load directly at BP's native rate rather than resampling the model-rate
+        # audio, which would have already discarded everything above 8 kHz.
+        audio_bp = load_resample(Path(audio_path), BP_NATIVE_SR).to(device)
+        pitch, velocity = basic_pitch_to_voices(
+            audio_bp,
+            n_voices=cfg.experiment.model.n_voices,
+            target_frames=target_frames,
+        )
+    elif pitch_encoder == "neutone-amt":
+        if pitch_encoder_checkpoint is None:
+            raise SystemExit(
+                "--pitch-encoder-checkpoint is required when "
+                "--pitch-encoder=neutone-amt"
+            )
+        pitch_encoder_checkpoint = Path(pitch_encoder_checkpoint)
+        if pitch_encoder_checkpoint.suffix.lower() == ".data":
+            raise SystemExit(
+                "--pitch-encoder-checkpoint must point to the .onnx file, "
+                "not its .onnx.data weights"
+            )
+        if not pitch_encoder_checkpoint.is_file():
+            raise SystemExit(
+                f"pitch encoder checkpoint does not exist: {pitch_encoder_checkpoint}"
+            )
+
+        from polyddsp.preprocess import (
+            NEUTONE_NATIVE_SR,
+            audio_within_duration_limit,
+            load_neutone_amt_model,
+            neutone_amt_to_voices,
         )
 
-    audio_bp = load_resample(Path(audio_path), BP_NATIVE_SR).to(device)
-    pitch, velocity = basic_pitch_to_voices(
-        audio_bp,
-        n_voices=cfg.experiment.model.n_voices,
-        target_frames=target_frames,
-    )
+        amt_model = load_neutone_amt_model(pitch_encoder_checkpoint, device)
+        native_sr = int(getattr(
+            amt_model.spec, "sample_rate", getattr(amt_model.spec, "sr", NEUTONE_NATIVE_SR),
+        ))
+        if not audio_within_duration_limit(
+            Path(audio_path),
+            max_samples=getattr(amt_model, "max_input_samples", None),
+            sample_rate=native_sr,
+        ):
+            raise SystemExit("input exceeds the selected Neutone model's duration limit")
+        pitch, velocity = neutone_amt_to_voices(
+            Path(audio_path),
+            sample_rate=int(cfg.model.sr),
+            target_hop=int(cfg.model.frame_hop),
+            n_voices=int(cfg.experiment.model.n_voices),
+            device=device,
+            model=amt_model,
+            target_frames=target_frames,
+        )
+    else:
+        raise SystemExit(
+            f"unknown pitch encoder {pitch_encoder!r}; expected one of {_PITCH_ENCODERS}"
+        )
+
     return {
         "pitch": pitch.unsqueeze(0).to(device),
         "velocity": velocity.unsqueeze(0).to(device),
@@ -136,13 +176,14 @@ def render_file(
     out_path: str | Path,
     device: str | None = None,
     chunk_frames: int | None = None,
+    pitch_encoder: str = "basic-pitch",
+    pitch_encoder_checkpoint: str | Path | None = None,
 ) -> None:
     """Resynthesise one audio file through a checkpoint and write the result.
 
-    The input is loaded twice — once at `cfg.model.sr` for the model, once at
-    Basic Pitch's native rate for transcription (see `pitch_features`), mirroring
-    what `preprocess.py` does. Output is peak-normalised, since DDSP output level
-    depends on the learned reverb/dry balance and is not calibrated to the input.
+    The input is loaded once for the synthesis model and once at the selected
+    pitch model's native rate, mirroring preprocessing. Output is peak-normalised,
+    since DDSP output level is not calibrated to the input.
     """
     device = device or ("cuda" if torch.cuda.is_available() else "cpu")
     model, cfg = load_run(ckpt, device)
@@ -161,23 +202,16 @@ def render_file(
         # One training clip's worth of frames: the block the decoder GRU was fit on.
         chunk_frames = int(float(cfg.model.clip_seconds) * sr) // hop
 
-    source = cfg.experiment.model.get("pitch_source", "basic_pitch")
-    if source == "cached_basic_pitch":
-        feats = pitch_features(audio_path, cfg, n_frames, device)
-    elif source == "basic_pitch":
-        # `PitchEncoder(source="basic_pitch")` transcribes in-loop from the
-        # model-rate audio and ignores any hint, so transcribing here too would
-        # just be wasted work.
-        print(
-            "note: this run's pitch_source is the in-loop 'basic_pitch' encoder — Basic Pitch "
-            f"runs inside the model on {sr} Hz audio, not on a 22.05 kHz load"
-        )
-        feats = {}
-    else:
-        raise SystemExit(
-            f"pitch_source={source!r} is not supported by polyddsp.infer; "
-            f"expected one of {_LIVE_BP_SOURCES}"
-        )
+    # Always transcribe this input live. Explicit features override the
+    # checkpoint's pitch encoder source; no pitch-cache sidecar is consulted.
+    feats = pitch_features(
+        audio_path,
+        cfg,
+        n_frames,
+        device,
+        pitch_encoder=pitch_encoder,
+        pitch_encoder_checkpoint=pitch_encoder_checkpoint,
+    )
 
     out = model.render(
         audio.unsqueeze(0).to(device),
@@ -197,7 +231,7 @@ def render_file(
     print(
         f"rendered {n_frames * hop / sr:.2f}s @ {sr} Hz "
         f"({n_frames} frames, {n_blocks} block(s), V={cfg.experiment.model.n_voices}, "
-        f"device={device}) -> {out_path}"
+        f"pitch_encoder={pitch_encoder}, device={device}) -> {out_path}"
     )
 
 
@@ -205,13 +239,21 @@ def main(argv: list[str] | None = None) -> None:
     import sys
 
     p = argparse.ArgumentParser(
-        prog="python -m polyddsp.infer",
+        prog="polyddsp-infer",
         description="Resynthesise an audio file through a trained PolyDDSP checkpoint.",
     )
     p.add_argument("--ckpt", required=True, help="path to best.pt / last.pt / top_*.pt")
     p.add_argument("--input", required=True, help="input audio file (any soundfile format)")
     p.add_argument("--out", required=True, help="output .wav path")
     p.add_argument("--device", default=None, help="cuda | cpu (default: cuda if available)")
+    p.add_argument(
+        "--pitch-encoder", choices=_PITCH_ENCODERS, default="basic-pitch",
+        help="live pitch encoder (default: basic-pitch)",
+    )
+    p.add_argument(
+        "--pitch-encoder-checkpoint", default=None,
+        help="Neutone Lightning checkpoint or ONNX export (required for neutone-amt)",
+    )
     p.add_argument(
         "--chunk-frames", "--chunk_frames", dest="chunk_frames", type=int, default=None,
         help="frames of audio synthesised per block (default: cfg.model.clip_seconds worth)",
@@ -224,6 +266,8 @@ def main(argv: list[str] | None = None) -> None:
         out_path=args.out,
         device=args.device,
         chunk_frames=args.chunk_frames,
+        pitch_encoder=args.pitch_encoder,
+        pitch_encoder_checkpoint=args.pitch_encoder_checkpoint,
     )
 
 
