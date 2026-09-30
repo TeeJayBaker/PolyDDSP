@@ -56,7 +56,9 @@ train:
   eval_cheap_every: 5000
   eval_full_every: 100000   # the FAD/CLAP battery is expensive; fire it once at the final step
   ckpt_keep_top_k: 3
-
+  z_warmup:
+    block_pct: 40
+    ramp_pct: 10
 tensorboard:
   enabled: true        # false disables event files/audio; log.jsonl is still written
   flush_secs: 30       # background event-file flush interval

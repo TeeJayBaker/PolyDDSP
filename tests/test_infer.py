@@ -100,7 +100,7 @@ def test_render_single_block_matches_forward() -> None:
 @pytest.mark.parametrize(
     "n_voices,use_z",
     [
-        (1, False),  # V=1: MonoDecoder drops the velocity stream (use_velocity=False)
+        (1, False),  # V=1: VoiceDecoder drops the velocity stream (use_velocity=False)
         (V, False),
         (V, True),   # z is whole-file conditioning; blocks must slice it consistently
     ],
@@ -178,11 +178,11 @@ def test_render_multi_block_matches_single_block_with_noise() -> None:
     assert (one - other).abs().max().item() > 1e-5
 
 
-def test_decode_block_matches_mono_decoder() -> None:
-    """`PolyDDSP._decode_block` must be `MonoDecoder.forward` plus GRU threading.
+def test_decode_block_matches_voice_decoder() -> None:
+    """`PolyDDSP._decode_block` must be `VoiceDecoder.forward` plus GRU threading.
 
     `_decode_block` re-runs the decoder's submodules by hand (to get at the GRU's
-    final hidden state, which `MonoDecoder.forward` discards and which
+    final hidden state, which `VoiceDecoder.forward` discards and which
     `decoder.py` is off-limits to change). Run over a whole clip with `h_0=None`
     and no look-ahead frame it must be the same computation.
     """

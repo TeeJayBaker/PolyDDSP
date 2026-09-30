@@ -3,11 +3,11 @@ from __future__ import annotations
 
 import torch
 
-from polyddsp.model.decoder import MonoDecoder
+from polyddsp.model.decoder import VoiceDecoder
 
 
-def test_mono_decoder_shapes(fake_features: dict) -> None:
-    dec = MonoDecoder(z_dim=16, n_harmonics=100, n_bands=65, use_z=True)
+def test_voice_decoder_shapes(fake_features: dict) -> None:
+    dec = VoiceDecoder(z_dim=16, n_harmonics=100, n_bands=65, use_z=True)
     harm_dist, amp_v, noise_mags = dec(**fake_features)
     B, V, T = 2, 2, 1_000
     assert harm_dist.shape == (B, V, T, 100)
@@ -19,18 +19,18 @@ def test_mono_decoder_shapes(fake_features: dict) -> None:
     assert (amp_v >= 0).all()
 
 
-def test_mono_decoder_no_z(fake_features: dict) -> None:
+def test_voice_decoder_no_z(fake_features: dict) -> None:
     feats = {**fake_features, "z": None}
-    dec = MonoDecoder(z_dim=16, n_harmonics=100, n_bands=65, use_z=False)
+    dec = VoiceDecoder(z_dim=16, n_harmonics=100, n_bands=65, use_z=False)
     harm_dist, amp_v, noise_mags = dec(**feats)
     assert harm_dist.shape == (2, 2, 1_000, 100)
     assert noise_mags.shape == (2, 2, 1_000, 65)
 
 
-def test_mono_decoder_solo_no_velocity(fake_features: dict) -> None:
+def test_voice_decoder_solo_no_velocity(fake_features: dict) -> None:
     """Solo case: use_velocity=False drops the velocity input MLP entirely."""
     feats = {**fake_features, "z": None}
-    dec = MonoDecoder(
+    dec = VoiceDecoder(
         z_dim=16, n_harmonics=60, n_bands=65, use_z=False, use_velocity=False
     )
     harm_dist, amp_v, noise_mags = dec(**feats)

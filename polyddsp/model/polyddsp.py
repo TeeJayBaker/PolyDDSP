@@ -7,7 +7,7 @@ import torch.nn as nn
 from omegaconf import DictConfig
 
 from polyddsp.model.additive import AdditiveSynth
-from polyddsp.model.decoder import MonoDecoder
+from polyddsp.model.decoder import VoiceDecoder
 from polyddsp.model.loudness import LoudnessExtractor
 from polyddsp.model.noise import FilteredNoise
 from polyddsp.model.pitch import PitchEncoder
@@ -73,7 +73,7 @@ class PolyDDSP(nn.Module):
         # to match DDSP's `RnnFcDecoder.input_keys = ('ld_scaled', 'f0_scaled')`.
         # Poly: per-voice velocity from BP `y_n[freq_idx]` is load-bearing.
         use_velocity = n_voices > 1
-        self.decoder = MonoDecoder(
+        self.decoder = VoiceDecoder(
             z_dim=z_dim,
             n_harmonics=n_harmonics,
             n_bands=noise_bands,
@@ -184,18 +184,18 @@ class PolyDDSP(nn.Module):
         h_0: torch.Tensor | None,
         n_core: int,
     ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
-        """`MonoDecoder.forward` with the GRU's hidden state threaded through.
+        """`VoiceDecoder.forward` with the GRU's hidden state threaded through.
 
-        `MonoDecoder.forward` drops the GRU's final hidden state (`gru_out, _ =
+        `VoiceDecoder.forward` drops the GRU's final hidden state (`gru_out, _ =
         self.gru(cat)`), so calling it once per block would silently restart the
         recurrence at every block boundary — the decoder outputs would then
         differ from a whole-file pass no matter how exact the oscillator is.
         Rather than change `decoder.py` (whose `forward` signature is what
         training and the parity tests are written against), this method runs the
-        decoder's own submodules in exactly the order `MonoDecoder.forward` does
+        decoder's own submodules in exactly the order `VoiceDecoder.forward` does
         and threads `h_0` / `h_n` through `self.decoder.gru` itself. Everything
         except the GRU is frame-wise, so nothing else needs state.
-        `tests/test_infer.py::test_decode_block_matches_mono_decoder` pins the
+        `tests/test_infer.py::test_decode_block_matches_voice_decoder` pins the
         two paths together.
 
         `n_core` frames are the block proper; any frames beyond that are the
@@ -266,10 +266,11 @@ class PolyDDSP(nn.Module):
         audio: torch.Tensor,
         pitch: torch.Tensor | None = None,
         velocity: torch.Tensor | None = None,
+        z_scale: float | None = 1.0
     ) -> tuple[torch.Tensor, dict]:
         pitch, velocity, loudness, z, bp_post = self._conditioning(audio, pitch, velocity)
 
-        mix, parts = self._synthesise(pitch, velocity, loudness, z)
+        mix, parts = self._synthesise(pitch, velocity, loudness, z, z_scale)
 
         out = self.reverb(mix) if self.use_reverb else mix
         out = out[..., : audio.shape[-1]]
@@ -367,12 +368,12 @@ class PolyDDSP(nn.Module):
             n_core = end - start
             ahead = min(end + 1, total_frames)  # one look-ahead frame for the amp lattice
 
-            z_blk = z[:, start:ahead, :] if z is not None else None
+            z_block = z[:, start:ahead, :] if z is not None else None
             harm_dist, amp_v, noise_mags, h = self._decode_block(
                 pitch_scaled[..., start:ahead],
                 velocity[..., start:ahead],
                 loudness[..., start:ahead],
-                z_blk,
+                z_block,
                 h,
                 n_core,
             )

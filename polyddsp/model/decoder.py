@@ -86,7 +86,7 @@ def _stack_voice_features(
     return torch.cat(parts, dim=-1)
 
 
-class MonoDecoder(nn.Module):
+class VoiceDecoder(nn.Module):
     """Per-voice decoder with joint (amp, harm_dist, noise_mags) head.
 
     DDSP's `RnnFcDecoder` generalised to V voices via batch fold. Inputs are
@@ -148,6 +148,7 @@ class MonoDecoder(nn.Module):
         velocity: torch.Tensor,
         loudness: torch.Tensor,
         z: torch.Tensor | None,
+        z_scale: float | None = 1.0,
     ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
         B, V, T = pitch.shape
         vel_in = velocity if self.use_velocity else None
@@ -162,7 +163,7 @@ class MonoDecoder(nn.Module):
         feats.append(self.loud_mlp(feat_in[..., idx:idx + 1]))
         idx += 1
         if self.use_z:
-            feats.append(self.z_mlp(feat_in[..., idx:]))
+            feats.append(self.z_mlp(feat_in[..., idx:]) * z_scale)
         cat = torch.cat(feats, dim=-1)
 
         gru_out, _ = self.gru(cat)
