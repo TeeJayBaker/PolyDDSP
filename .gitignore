@@ -12,7 +12,9 @@ dist/
 
 # Outputs
 outputs/
+data/
 wandb/
+events.out.tfevents.*
 results/*
 !results/final_metrics.json
 *.parquet
@@ -20,6 +22,7 @@ results/*
 # Checkpoints (tracked exception: the ported Basic Pitch weights)
 *.pth
 *.pt
+*.onnx*
 !polyddsp/model/weights/bp_pytorch.pth
 
 # Datasets are never stored in the repo; point POLYDDSP_DATA_DIR at them instead

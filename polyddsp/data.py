@@ -16,6 +16,8 @@ import torch
 import torchaudio.functional as AF
 from torch.utils.data import Dataset
 
+from polyddsp.preprocess import cache_path_for
+
 
 def _file_duration(path: Path) -> float:
     """Audio duration in seconds without loading samples."""
@@ -41,11 +43,9 @@ def _load_cached(path_str: str, target_sr: int) -> torch.Tensor:
 
 
 @functools.lru_cache(maxsize=64)
-def _load_bp_cache_cached(path_str: str, suffix: str) -> dict[str, torch.Tensor]:
+def _load_bp_cache_cached(path_str: str) -> dict[str, torch.Tensor]:
     """Per-process cache of full-file BP allocation: {pitch, velocity} of shape (V, T)."""
-    audio_path = Path(path_str)
-    cache = audio_path.with_suffix(audio_path.suffix + f".{suffix}.f0.pt")
-    return torch.load(cache, map_location="cpu", weights_only=True)
+    return torch.load(path_str, map_location="cpu", weights_only=True)
 
 
 def _random_window_with_start(
@@ -68,8 +68,9 @@ class RawAudioDataset(Dataset):
         clip_seconds: float = 4.0,
         seed: int = 0,
         file_glob: str = "**/*.wav",
-        pitch_cache_kind: Literal["basic_pitch"] | None = None,
+        pitch_cache_kind: Literal["basic_pitch", "neutone"] | None = None,
         pitch_cache_suffix: str | None = None,
+        pitch_cache_root: str | None = None,
         f0_hop: int = 64,
         n_voices: int | None = None,
     ) -> None:
@@ -84,6 +85,7 @@ class RawAudioDataset(Dataset):
 
         self.pitch_cache_kind = pitch_cache_kind
         self.pitch_cache_suffix = pitch_cache_suffix
+        self.pitch_cache_root = Path(pitch_cache_root) if pitch_cache_root is not None else None
 
         files = sorted(self.root.glob(file_glob))
         if not files:
@@ -100,16 +102,33 @@ class RawAudioDataset(Dataset):
 
         if pitch_cache_kind is not None:
             if n_voices is None:
-                raise ValueError("pitch_cache_kind='basic_pitch' requires n_voices")
+                raise ValueError(f"pitch_cache_kind={pitch_cache_kind!r} requires n_voices")
             missing = [
                 p for p in self.active
-                if not p.with_suffix(p.suffix + f".{pitch_cache_suffix}.f0.pt").exists()
+                if not cache_path_for(
+                    p,
+                    pitch_cache_suffix,
+                    root=self.root,
+                    output_dir=self.pitch_cache_root,
+                ).exists()
             ]
             if missing:
+                preprocess_cmd = (
+                    f"polyddsp-preprocess data_root={self.root} "
+                    f"file_glob='{file_glob}' "
+                    f"model={'neutone-amt' if pitch_cache_kind == 'neutone' else 'basic-pitch'} "
+                    f"n_voices={n_voices} "
+                    f"sample_rate={sample_rate} hop={f0_hop}"
+                )
+                if pitch_cache_kind == "neutone":
+                    preprocess_cmd += " model_path=/path/to/amt.onnx"
+                if self.pitch_cache_root is not None:
+                    preprocess_cmd += (
+                        f" output_dir={self.pitch_cache_root}"
+                    )
                 raise FileNotFoundError(
                     f"pitch cache missing for {len(missing)}/{len(self.active)} files "
-                    f"(suffix={pitch_cache_suffix}); run "
-                    f"`python -m polyddsp.preprocess --root {self.root} --n-voices {n_voices}`. "
+                    f"(suffix={pitch_cache_suffix}); run `{preprocess_cmd}`. "
                     f"First missing: {missing[0]}"
                 )
 
@@ -134,7 +153,13 @@ class RawAudioDataset(Dataset):
             return clip
         target_frames = self.clip_samples // self.f0_hop
         f0_start = start // self.f0_hop
-        blob = _load_bp_cache_cached(str(audio_path), self.pitch_cache_suffix)
+        cache = cache_path_for(
+            audio_path,
+            self.pitch_cache_suffix,
+            root=self.root,
+            output_dir=self.pitch_cache_root,
+        )
+        blob = _load_bp_cache_cached(str(cache))
         pitch = blob["pitch"][:, f0_start : f0_start + target_frames]
         velocity = blob["velocity"][:, f0_start : f0_start + target_frames]
         if pitch.shape[-1] < target_frames:

@@ -16,6 +16,7 @@ from omegaconf import DictConfig, OmegaConf
 from torch.optim import Adam, AdamW
 from torch.optim.lr_scheduler import CosineAnnealingWarmRestarts, ExponentialLR
 from torch.utils.data import DataLoader
+from tqdm.auto import tqdm
 
 from polyddsp.data import RawAudioDataset
 from polyddsp.losses import MultiScaleSpectral
@@ -118,7 +119,7 @@ class TrainState:
         last = out_dir / "last.pt"
         state = cls()
         if last.exists():
-            ckpt = torch.load(last, map_location="cpu")
+            ckpt = torch.load(last, map_location="cpu", weights_only=True)
             model.load_state_dict(ckpt["model"])
             opt.load_state_dict(ckpt["opt"])
             sched.load_state_dict(ckpt["sched"])
@@ -176,37 +177,44 @@ class TopKCheckpoint:
 # ---------------------------------------------------------------------- logger
 
 
-class WandbLogger:
-    def __init__(self, cfg: DictConfig, out_dir: Path) -> None:
-        import wandb
-
+class TensorBoardLogger:
+    def __init__(self, cfg: DictConfig, out_dir: Path, *, purge_step: int | None = None) -> None:
         self.cfg = cfg
         self.out_dir = out_dir
+        self.writer = None
+        if cfg.tensorboard.enabled:
+            from torch.utils.tensorboard import SummaryWriter
+
+            self.writer = SummaryWriter(
+                log_dir=str(out_dir / "tensorboard"),
+                flush_secs=cfg.tensorboard.flush_secs,
+                purge_step=purge_step,
+            )
+            self.writer.add_text(
+                "config", f"```yaml\n{OmegaConf.to_yaml(cfg, resolve=True)}```",
+                global_step=purge_step or 0,
+            )
         self.jsonl = (out_dir / "log.jsonl").open("a")
-        self.run = wandb.init(
-            project=cfg.wandb.project,
-            entity=cfg.wandb.entity,
-            mode=cfg.wandb.mode,
-            name=out_dir.name,
-            config=OmegaConf.to_container(cfg, resolve=True),
-            dir=str(out_dir),
-        )
 
     def log_step(self, step: int, loss: torch.Tensor) -> None:
         payload = {"step": step, "loss": float(loss.item())}
-        self.run.log(payload, step=step)
+        if self.writer is not None:
+            self.writer.add_scalar("loss", payload["loss"], global_step=step)
         self.jsonl.write(json.dumps(payload) + "\n")
         self.jsonl.flush()
 
     def log_metrics(self, step: int, metrics: dict, prefix: str = "val/") -> None:
         flat = {f"{prefix}{k}": float(v) for k, v in metrics.items()}
+        if self.writer is not None:
+            for tag, value in flat.items():
+                self.writer.add_scalar(tag, value, global_step=step)
         flat["step"] = step
-        self.run.log(flat, step=step)
         self.jsonl.write(json.dumps(flat) + "\n")
         self.jsonl.flush()
 
     def log_audio_sample(self, step: int, model: PolyDDSP, val_loader: DataLoader) -> None:
-        import wandb
+        if self.writer is None:
+            return
 
         model.eval()
         with torch.no_grad():
@@ -228,22 +236,25 @@ class WandbLogger:
         dry_mix_norm = dry_mix / (max(abs(dry_mix.max()), abs(dry_mix.min())) + 1e-9) * 0.99
         # The reverb returns dry + wet, so pred - dry_mix is the 100% wet tail.
         wet_only = (pred[0].cpu().numpy() - dry_mix)
-        self.run.log(
-            {
-                "val/audio_ref": wandb.Audio(audio[0].cpu().numpy(), sample_rate=sr),
-                "val/audio_pred": wandb.Audio(pred[0].cpu().numpy(), sample_rate=sr),
-                "val/audio_harm": wandb.Audio(harm.cpu().numpy(), sample_rate=sr),
-                "val/audio_noise": wandb.Audio(noise.cpu().numpy(), sample_rate=sr),
-                "val/audio_dry_mix_norm": wandb.Audio(dry_mix_norm, sample_rate=sr),
-                "val/audio_wet": wandb.Audio(wet_only, sample_rate=sr),
-                "step": step,
-            },
-            step=step,
-        )
+        clips = {
+            "val/audio_ref": audio[0].cpu().numpy(),
+            "val/audio_pred": pred[0].cpu().numpy(),
+            "val/audio_harm": harm.cpu().numpy(),
+            "val/audio_noise": noise.cpu().numpy(),
+            "val/audio_dry_mix_norm": dry_mix_norm,
+            "val/audio_wet": wet_only,
+        }
+        for tag, clip in clips.items():
+            # Match the old PCM WAV previews: clip overloads, but retain the
+            # relative levels of all stems except the explicitly normalized mix.
+            self.writer.add_audio(tag, clip.clip(-1, 1)[None, :], global_step=step, sample_rate=sr)
 
     def close(self) -> None:
-        self.jsonl.close()
-        self.run.finish()
+        try:
+            self.jsonl.close()
+        finally:
+            if self.writer is not None:
+                self.writer.close()
 
 
 # ----------------------------------------------------------------- main loop
@@ -296,7 +307,13 @@ def _evaluate_cheap(model, val_loader, sr: int, primary: list[str]) -> dict[str,
     model.eval()
     device = next(model.parameters()).device
     with torch.no_grad():
-        for batch in val_loader:
+        for batch in tqdm(
+            val_loader,
+            desc="validation",
+            unit="batch",
+            leave=False,
+            dynamic_ncols=True,
+        ):
             audio, model_kwargs = _unwrap(batch)
             audio = audio.to(device)
             for k, v in model_kwargs.items():
@@ -339,7 +356,13 @@ def _evaluate_full(
 
     with torch.no_grad():
         for li, loader in enumerate(loaders):
-            for batch in loader:
+            for batch in tqdm(
+                loader,
+                desc=f"full eval {li + 1}/{len(loaders)}",
+                unit="batch",
+                leave=False,
+                dynamic_ncols=True,
+            ):
                 audio, model_kwargs = _unwrap(batch)
                 audio = audio.to(device)
                 for k, v in model_kwargs.items():
@@ -376,7 +399,9 @@ def main(cfg: DictConfig) -> None:
     set_seed(cfg.run.seed)
     device = "cuda" if torch.cuda.is_available() else "cpu"
 
-    pitch_cache_kind, pitch_cache_suffix, n_voices_for_cache = resolve_pitch_cache(cfg)
+    pitch_cache_kind, pitch_cache_suffix, n_voices_for_cache = resolve_pitch_cache(
+        cfg, source=cfg.experiment.dataset.get("pitch_cache_source", "basic-pitch"),
+    )
 
     train_ds = RawAudioDataset(
         root=cfg.experiment.dataset.root,
@@ -387,6 +412,7 @@ def main(cfg: DictConfig) -> None:
         file_glob=cfg.experiment.dataset.file_glob,
         pitch_cache_kind=pitch_cache_kind,
         pitch_cache_suffix=pitch_cache_suffix,
+        pitch_cache_root=cfg.experiment.dataset.get("pitch_cache_root"),
         f0_hop=cfg.model.frame_hop,
         n_voices=n_voices_for_cache,
     )
@@ -399,6 +425,7 @@ def main(cfg: DictConfig) -> None:
         file_glob=cfg.experiment.dataset.file_glob,
         pitch_cache_kind=pitch_cache_kind,
         pitch_cache_suffix=pitch_cache_suffix,
+        pitch_cache_root=cfg.experiment.dataset.get("pitch_cache_root"),
         f0_hop=cfg.model.frame_hop,
         n_voices=n_voices_for_cache,
     )
@@ -423,7 +450,9 @@ def main(cfg: DictConfig) -> None:
 
     state = TrainState.resume_or_init(cfg, model, opt, sched)
     out_dir = TrainState.out_dir_for(cfg)
-    logger = WandbLogger(cfg, out_dir)
+    logger = TensorBoardLogger(
+        cfg, out_dir, purge_step=state.step if (out_dir / "last.pt").exists() else None,
+    )
     ckpt = TopKCheckpoint(out_dir, k=cfg.train.ckpt_keep_top_k)
 
     train_loader = _make_loader(train_ds, cfg.train.batch_size, shuffle=True)
@@ -454,14 +483,22 @@ def main(cfg: DictConfig) -> None:
         logger.log_metrics(state.step, step0_metrics, prefix="val/")
         logger.log_audio_sample(state.step, model, val_loader)
 
+    progress = tqdm(
+        total=cfg.train.steps,
+        initial=min(state.step, cfg.train.steps),
+        desc=f"train {cfg.experiment.name}",
+        unit="step",
+        dynamic_ncols=True,
+    )
     try:
         for batch in _infinite(train_loader):
             loss = train_step(model, batch, loss_fn, opt, sched, grad_clip=cfg.train.grad_clip)
-            # Logging every step costs a CUDA sync (`loss.item()`) + wandb call
+            # Logging every step costs a CUDA sync (`loss.item()`) + summary write
             # + jsonl.flush; serialised against the next iter's H2D copy. Gate on
             # `train.log_every` so the GPU stays pipelined.
             if state.step % cfg.train.log_every == 0:
                 logger.log_step(state.step, loss)
+                progress.set_postfix(loss=f"{loss.item():.4f}")
 
             if state.step > 0 and state.step % cfg.train.eval_cheap_every == 0:
                 metrics = _evaluate_cheap(model, val_loader, cfg.model.sr, primary)
@@ -484,9 +521,11 @@ def main(cfg: DictConfig) -> None:
                     torch.cuda.empty_cache()
 
             state.step += 1
+            progress.update(1)
             if state.step >= cfg.train.steps:
                 break
     finally:
+        progress.close()
         state.save(out_dir / "last.pt", model, opt, sched)
         # Always log a final full eval on the last checkpoint so CLAP/FAD aren't
         # tied solely to the eval_full_every cadence.

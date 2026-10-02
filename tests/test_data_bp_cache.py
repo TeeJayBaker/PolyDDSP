@@ -74,3 +74,31 @@ def test_dataset_raises_clearly_when_bp_cache_missing(tmp_path: Path) -> None:
             pitch_cache_suffix=bp_cache_suffix(n_voices, sr, hop),
             f0_hop=hop, n_voices=n_voices,
         )
+
+
+def test_dataset_reads_pitch_cache_from_separate_root(tmp_path: Path) -> None:
+    sr, hop, n_voices = 16000, 64, 6
+    root = tmp_path / "audio"
+    audio = root / "player_00" / "fake.wav"
+    audio.parent.mkdir(parents=True)
+    _write_silence(audio, sr=sr, duration_s=6)
+
+    suffix = bp_cache_suffix(n_voices, sr, hop)
+    cache_root = tmp_path / "pitch-cache"
+    cache = cache_path_for(audio, suffix, root=root, output_dir=cache_root)
+    cache.parent.mkdir(parents=True)
+    n_frames = (sr * 6) // hop
+    torch.save({
+        "pitch": torch.full((n_voices, n_frames), 220.0),
+        "velocity": torch.full((n_voices, n_frames), 0.7),
+    }, cache)
+
+    ds = RawAudioDataset(
+        root=str(root), split="val", sample_rate=sr, clip_seconds=4.0,
+        seed=0, file_glob="**/*.wav",
+        pitch_cache_kind="basic_pitch", pitch_cache_suffix=suffix,
+        pitch_cache_root=str(cache_root), f0_hop=hop, n_voices=n_voices,
+    )
+
+    item = ds[0]
+    assert item["pitch"].shape == (n_voices, 4 * sr // hop)
