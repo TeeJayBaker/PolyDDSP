@@ -43,8 +43,8 @@ def _load_cached(path_str: str, target_sr: int) -> torch.Tensor:
 
 
 @functools.lru_cache(maxsize=64)
-def _load_bp_cache_cached(path_str: str) -> dict[str, torch.Tensor]:
-    """Per-process cache of full-file BP allocation: {pitch, velocity} of shape (V, T)."""
+def _load_bp_cache_cached(path_str: str) -> dict[str, object]:
+    """Per-process cache of pitch allocation tensors and optional source metadata."""
     return torch.load(path_str, map_location="cpu", weights_only=True)
 
 
@@ -68,7 +68,8 @@ class RawAudioDataset(Dataset):
         clip_seconds: float = 4.0,
         seed: int = 0,
         file_glob: str = "**/*.wav",
-        pitch_cache_kind: Literal["basic_pitch", "neutone"] | None = None,
+        pitch_cache_kind: Literal["basic-pitch", "neutone", "ground_truth"] | None = None,
+        pitch_cache_source: str | None = None,
         pitch_cache_suffix: str | None = None,
         pitch_cache_root: str | None = None,
         f0_hop: int = 64,
@@ -84,6 +85,7 @@ class RawAudioDataset(Dataset):
         self.n_voices = n_voices
 
         self.pitch_cache_kind = pitch_cache_kind
+        self.pitch_cache_source = pitch_cache_source
         self.pitch_cache_suffix = pitch_cache_suffix
         self.pitch_cache_root = Path(pitch_cache_root) if pitch_cache_root is not None else None
 
@@ -113,10 +115,19 @@ class RawAudioDataset(Dataset):
                 ).exists()
             ]
             if missing:
+                if pitch_cache_kind == "ground_truth":
+                    raise FileNotFoundError(
+                        f"ground-truth MIDI cache missing for {len(missing)}/{len(self.active)} "
+                        f"files (suffix={pitch_cache_suffix}); run `polyddsp-preprocess "
+                        f"data_root={self.root} file_glob='{file_glob}' "
+                        f"model=ground-truth n_voices={n_voices} "
+                        f"sample_rate={sample_rate} hop={f0_hop}` "
+                        f"before training. First missing: {missing[0]}"
+                    )
                 preprocess_cmd = (
                     f"polyddsp-preprocess data_root={self.root} "
                     f"file_glob='{file_glob}' "
-                    f"model={'neutone-amt' if pitch_cache_kind == 'neutone' else 'basic-pitch'} "
+                    f"model={pitch_cache_source or 'basic-pitch'} "
                     f"n_voices={n_voices} "
                     f"sample_rate={sample_rate} hop={f0_hop}"
                 )
@@ -160,6 +171,16 @@ class RawAudioDataset(Dataset):
             output_dir=self.pitch_cache_root,
         )
         blob = _load_bp_cache_cached(str(cache))
+        cached_source = blob.get("pitch_cache_source")
+        if (
+            cached_source is not None
+            and self.pitch_cache_source is not None
+            and cached_source != self.pitch_cache_source
+        ):
+            raise ValueError(
+                f"pitch cache source mismatch for {cache}: expected "
+                f"{self.pitch_cache_source!r}, found {cached_source!r}"
+            )
         pitch = blob["pitch"][:, f0_start : f0_start + target_frames]
         velocity = blob["velocity"][:, f0_start : f0_start + target_frames]
         if pitch.shape[-1] < target_frames:

@@ -4,9 +4,10 @@ experiment:
   dataset:
     root: ${run.data_root}/maestro/bach_2018
     file_glob: "**/*.wav"
+    midi_glob: "**/*.midi"
     # null keeps the legacy sidecar layout; set this to use a separate cache tree.
     pitch_cache_root: null
-    pitch_cache_source: basic-pitch  # basic-pitch | neutone-amt | ground-truth
+    pitch_cache_source: basic-pitch  # basic-pitch | neutone-amt-streaming | neutone-amt-nonstreaming | ground-truth
 
   model:
     n_voices: 10

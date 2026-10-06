@@ -43,6 +43,27 @@ environment consistent. Files are split 80/20 train/val from `run.seed`.
 
 ## Usage
 
+Machine-local paths, GPU choices, and the selected pitch-cache source live in
+`configs/local/default.yaml`, which is ignored by Git and loaded automatically.
+Start from the committed template:
+
+```bash
+cp configs/local/example.yaml configs/local/default.yaml
+```
+
+Edit that local file once, then use the committed training profiles:
+
+```bash
+polyddsp-train train_profile=guitarset
+polyddsp-train train_profile=gaps
+polyddsp-train train_profile=maestro
+```
+
+The profiles in `configs/train_profile/` contain portable experiment and
+training settings; they do not select a pitch-cache source. Normal Hydra
+overrides still work, for example
+`polyddsp-train train_profile=maestro train.steps=50000`.
+
 ```bash
 # 1. Transcribe the dataset to a pitch cache. Required before training.
 polyddsp-preprocess experiment=guitarset
@@ -57,17 +78,22 @@ python -m polyddsp.eval experiment=guitarset ckpt=outputs/<run>/best.pt
 polyddsp-infer --ckpt outputs/<run>/best.pt --input clip.wav --out resynth.wav
 ```
 
+Training uses one device. It defaults to `device=auto`, which selects CUDA when
+available and CPU otherwise. Select a GPU explicitly with, for example,
+`polyddsp-train experiment=guitarset device=cuda:1`; use `device=cpu` to force CPU.
+As usual, CUDA indices refer to the devices visible through `CUDA_VISIBLE_DEVICES`.
+
 Inference uses Basic Pitch by default. To transcribe with Neutone AMT instead,
 select it and provide the same kind of Lightning checkpoint or ONNX export used
 by preprocessing:
 
 ```bash
 polyddsp-infer --ckpt outputs/<run>/best.pt --input clip.wav --out resynth.wav \
-    --pitch-encoder neutone-amt \
+    --pitch-encoder neutone-amt-nonstreaming \
     --pitch-encoder-checkpoint ./checkpoints/NeutoneAMT/amt.onnx
 ```
 
-`basic-pitch` and `neutone-amt` both transcribe in-process and do
+`basic-pitch`, `neutone-amt-streaming`, and `neutone-amt-nonstreaming` all transcribe in-process and do
 not read or write a pitch-cache sidecar. The live transcription is passed
 directly to PolyDDSP regardless of the checkpoint's configured pitch source.
 
@@ -84,16 +110,19 @@ To preprocess with Neutone AMT, pass a Lightning checkpoint or an ONNX export:
 polyddsp-preprocess experiment=guitarset \
     data_root=/media/ssd2/data/guitarset/audio_mono-pickup_mix \
     output_dir=./data/neutone-amt/guitarset \
-    model=neutone-amt \
+    model=neutone-amt-nonstreaming \
     model_path=./checkpoints/NeutoneAMT/amt.onnx
 ```
 
 Keep any accompanying `amt.onnx.data` file beside `amt.onnx`. Both streaming
-exports (audio plus state cache) and offline exports are supported. Streaming
+exports (audio plus state cache) and offline exports are supported. Select them
+with `model=neutone-amt-streaming` and `model=neutone-amt-nonstreaming`,
+respectively; preprocessing verifies the selection against the ONNX graph. Streaming
 state resets for each file; multi-delay exports use the first/lowest-delay
 readout, matching the checkpoint backend. Timing comes from export metadata,
 with 44.1 kHz / hop 512 defaults for older exports. Output caches use the
-`neutone_v{V}_sr{sample_rate}_hop{hop}` suffix and constant MIDI velocity 64.
+`neutone_streaming_v{V}_sr{sample_rate}_hop{hop}` or
+`neutone_nonstreaming_v{V}_sr{sample_rate}_hop{hop}` suffix and constant MIDI velocity 64.
 ONNX Runtime is installed by `uv sync`, with CPU and CUDA support on Linux
 x86-64 and CPU support on other platforms. Use `device=cpu` to force
 CPU inference or `device=cuda:0` to select a GPU.
@@ -112,13 +141,34 @@ To train using these Neutone caches:
 polyddsp-train experiment=guitarset \
     experiment.dataset.root=/media/ssd2/data/guitarset/audio_mono-pickup_mix \
     experiment.dataset.pitch_cache_root=./data/neutone-amt/guitarset \
-    experiment.dataset.pitch_cache_source=neutone-amt
+    experiment.dataset.pitch_cache_source=neutone-amt-nonstreaming
 ```
 
 Pass the same dataset overrides when evaluating. `pitch_cache_source` defaults
-to `basic-pitch`; selecting `neutone-amt` uses the `neutone_v6_sr16000_hop64` suffix
-for this configuration. Both use the existing `cached_basic_pitch` pitch source,
-which reads the shared pitch/velocity tensor format.
+to `basic-pitch`; selecting `neutone-amt-nonstreaming` uses the
+`neutone_nonstreaming_v6_sr16000_hop64` suffix for this configuration. All three
+options use the existing `cached_basic_pitch` model input, which reads the shared
+pitch/velocity tensor format. New caches also record their source internally;
+training rejects a cache whose recorded source disagrees with
+`pitch_cache_source`, while legacy caches without metadata remain readable.
+
+Ground-truth caches use `pitch_cache_source=ground-truth` and the suffix
+`ground_truth_v{V}_sr{sample_rate}_hop{hop}`. Generate them with:
+
+```bash
+polyddsp-preprocess experiment=maestro model=ground-truth
+```
+
+Each audio file is paired with the unique MIDI file having the same filename
+stem among files selected by `midi_glob`. Both globs are evaluated beneath the
+same dataset root, but independently: `file_glob` selects audio and `midi_glob`
+selects MIDI. For GAPS, point `data_root` at the GAPS directory and use globs
+such as `audio/*wc.wav` and `midi/*.mid`.
+Ground-truth
+preprocessing applies sustain pedal, normalized note velocity, and track pitch
+bends (default full-scale range: `pitch_bend_range=2.0` semitones). Disable pedal
+extension with `apply_sustain=false` when the MIDI note durations already include
+it.
 
 Set `parallel=true` to process files concurrently with
 [Memex](https://github.com/bgenchel/Memex). Without it, processing is sequential.
@@ -140,25 +190,26 @@ files are published atomically so Memex can retry an out-of-memory task safely.
 More workers use more memory; throughput depends on the model and available
 compute.
 
-- `configs/preprocess.yaml` owns preprocessing settings. Only `data_root`,
-  `file_glob`, and `n_voices` default to values from the
+- `configs/preprocess.yaml` owns preprocessing settings. `data_root`,
+  `file_glob`, `midi_glob`, and `n_voices` default to values from the
   selected experiment; each can also be overridden directly. Select the pitch
-  model with `model=basic-pitch` or `model=neutone-amt`.
+  model with `model=basic-pitch`, `model=neutone-amt-streaming`,
+  `model=neutone-amt-nonstreaming`, or `model=ground-truth`.
   Set `sample_rate` and `hop` to match the training model's
   `model.sr` and `model.frame_hop`, and match the voice count too. Training's
   `experiment.dataset.pitch_cache_source` selects which generated cache to
-  read (`basic-pitch` or `neutone-amt`); its `pitch_cache_root` points to the
+  read (one of those same four names); its `pitch_cache_root` points to the
   preprocessing output directory when using separate cache storage.
 - The cache is a per-file `.bp_v{V}_sr16000_hop64.f0.pt` sidecar, and is skipped
   if newer than its audio.
 - `infer` transcribes in-process with `--pitch-encoder basic-pitch` (the default)
-  or `--pitch-encoder neutone-amt`, so it needs no cache and takes any audio file.
+  or either Neutone AMT variant, so it needs no cache and takes any audio file.
 - Config is Hydra (`configs/config.yaml`, `configs/preprocess.yaml`, and
   `configs/experiment/*.yaml`); any key can be overridden on the CLI, e.g.
   `train.batch_size=8`. Checkpoints, the resolved config, `log.jsonl` and metric
   summaries go to `$POLYDDSP_OUT_DIR/<run.name>/` (default: `outputs/<run.name>/`).
   Default run names use `experiment_YYMMDDTHHmm_pitch-cache-source`, for example
-  `guitarset_260930T0915_neutone-amt`.
+  `guitarset_260930T0915_neutone-amt-nonstreaming`.
 
 ### Training logs
 
@@ -175,7 +226,9 @@ Open `http://localhost:6006`. Each run writes events under
 - Scalars retain the existing tags: `loss`, `val/<metric>`, and
   `val/final/<metric>`, at the same training/evaluation intervals.
 - Audio retains all six previews: reference, prediction, harmonic, noise,
-  peak-normalized dry mix, and wet-only reverb (`val/audio_*`).
+  peak-normalized dry mix, and wet-only reverb. Periodic and final-model previews
+  are labelled `val/last.pt/audio_*`; the best validation-MSS checkpoint is
+  rendered at shutdown under `val/best.pt/audio_*`.
 - The resolved Hydra config appears in the Text tab under `config`.
 
 Resuming reuses the run's event directory and hides events at or beyond the

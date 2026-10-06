@@ -1,0 +1,21 @@
+# @package _global_
+# Portable training settings. Machine-specific roots/devices come from local/default.yaml.
+defaults:
+  - override /experiment: guitarset
+
+device: ${run.devices.guitarset}
+
+run:
+  fresh: true
+
+experiment:
+  dataset:
+    root: ${run.data_root}/guitarset/audio_mono-pickup_mix
+    pitch_cache_root: ${run.cache_root}/guitarset
+    pitch_cache_source: ${run.pitch_cache_source}
+
+train:
+  steps: 10000
+  batch_size: 2
+  eval_cheap_every: 500
+  eval_full_every: 1000000

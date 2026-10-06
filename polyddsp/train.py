@@ -40,6 +40,31 @@ def set_seed(seed: int) -> None:
         torch.cuda.manual_seed_all(seed)
 
 
+def resolve_device(requested: str) -> str:
+    """Resolve one training device from `auto | cpu | cuda | cuda:N`."""
+    if requested == "auto":
+        return "cuda" if torch.cuda.is_available() else "cpu"
+    try:
+        device = torch.device(requested)
+    except (RuntimeError, ValueError) as exc:
+        raise ValueError(
+            f"invalid training device {requested!r}; expected auto, cpu, cuda, or cuda:N"
+        ) from exc
+    if device.type not in {"cpu", "cuda"} or (device.type == "cpu" and device.index is not None):
+        raise ValueError(
+            f"invalid training device {requested!r}; expected auto, cpu, cuda, or cuda:N"
+        )
+    if device.type == "cuda":
+        if not torch.cuda.is_available():
+            raise ValueError(f"training device {requested!r} requested, but CUDA is unavailable")
+        if device.index is not None and device.index >= torch.cuda.device_count():
+            raise ValueError(
+                f"training device {requested!r} does not exist; "
+                f"found {torch.cuda.device_count()} CUDA device(s)"
+            )
+    return str(device)
+
+
 def _unwrap(batch: Any) -> tuple[torch.Tensor, dict]:
     """Peel a dataset batch into (audio, model_kwargs).
 
@@ -216,7 +241,13 @@ class TensorBoardLogger:
         self.jsonl.write(json.dumps(flat) + "\n")
         self.jsonl.flush()
 
-    def log_audio_sample(self, step: int, model: PolyDDSP, val_loader: DataLoader) -> None:
+    def log_audio_sample(
+        self,
+        step: int,
+        model: PolyDDSP,
+        val_loader: DataLoader,
+        checkpoint_label: str = "last.pt",
+    ) -> None:
         if self.writer is None:
             return
 
@@ -240,13 +271,14 @@ class TensorBoardLogger:
         dry_mix_norm = dry_mix / (max(abs(dry_mix.max()), abs(dry_mix.min())) + 1e-9) * 0.99
         # The reverb returns dry + wet, so pred - dry_mix is the 100% wet tail.
         wet_only = (pred[0].cpu().numpy() - dry_mix)
+        prefix = f"val/{checkpoint_label}"
         clips = {
-            "val/audio_ref": audio[0].cpu().numpy(),
-            "val/audio_pred": pred[0].cpu().numpy(),
-            "val/audio_harm": harm.cpu().numpy(),
-            "val/audio_noise": noise.cpu().numpy(),
-            "val/audio_dry_mix_norm": dry_mix_norm,
-            "val/audio_wet": wet_only,
+            f"{prefix}/audio_ref": audio[0].cpu().numpy(),
+            f"{prefix}/audio_pred": pred[0].cpu().numpy(),
+            f"{prefix}/audio_harm": harm.cpu().numpy(),
+            f"{prefix}/audio_noise": noise.cpu().numpy(),
+            f"{prefix}/audio_dry_mix_norm": dry_mix_norm,
+            f"{prefix}/audio_wet": wet_only,
         }
         for tag, clip in clips.items():
             # Match the old PCM WAV previews: clip overloads, but retain the
@@ -401,11 +433,12 @@ def _evaluate_full(
 @hydra.main(config_path="../configs", config_name="config", version_base=None)
 def main(cfg: DictConfig) -> None:
     set_seed(cfg.run.seed)
-    device = "cuda" if torch.cuda.is_available() else "cpu"
+    device = resolve_device(str(cfg.get("device", "auto")))
 
     pitch_cache_kind, pitch_cache_suffix, n_voices_for_cache = resolve_pitch_cache(
         cfg, source=cfg.experiment.dataset.get("pitch_cache_source", "basic-pitch"),
     )
+    pitch_cache_source = cfg.experiment.dataset.get("pitch_cache_source", "basic-pitch")
 
     train_ds = RawAudioDataset(
         root=cfg.experiment.dataset.root,
@@ -415,6 +448,7 @@ def main(cfg: DictConfig) -> None:
         seed=cfg.run.seed,
         file_glob=cfg.experiment.dataset.file_glob,
         pitch_cache_kind=pitch_cache_kind,
+        pitch_cache_source=pitch_cache_source,
         pitch_cache_suffix=pitch_cache_suffix,
         pitch_cache_root=cfg.experiment.dataset.get("pitch_cache_root"),
         f0_hop=cfg.model.frame_hop,
@@ -428,6 +462,7 @@ def main(cfg: DictConfig) -> None:
         seed=cfg.run.seed,
         file_glob=cfg.experiment.dataset.file_glob,
         pitch_cache_kind=pitch_cache_kind,
+        pitch_cache_source=pitch_cache_source,
         pitch_cache_suffix=pitch_cache_suffix,
         pitch_cache_root=cfg.experiment.dataset.get("pitch_cache_root"),
         f0_hop=cfg.model.frame_hop,
@@ -478,7 +513,7 @@ def main(cfg: DictConfig) -> None:
     start = time.time()
 
     # Step-0 eval: verifies cached annotations + val pipeline before any gradient
-    # step. The val/audio_ref + val/audio_harm pair is the pitch-correctness check
+    # step. The last.pt audio_ref + audio_harm pair is the pitch-correctness check
     # — at random init audio_harm should already be a buzzy chord at the audio's
     # pitches; if pitches don't match, the cache is wrong.
     if state.step == 0:
@@ -539,7 +574,20 @@ def main(cfg: DictConfig) -> None:
                 logger.log_metrics(state.step, final, prefix="val/final/")
         except Exception:  # noqa: BLE001 — never let final eval mask training errors
             log.exception("Final full eval failed")
-        logger.close()
+        try:
+            # Explicit end-of-training previews make the final and best checkpoint
+            # audible without relying on the periodic evaluation cadence.
+            if logger.writer is not None:
+                logger.log_audio_sample(state.step, model, val_loader, "last.pt")
+                best_path = out_dir / "best.pt"
+                if best_path.exists():
+                    best_ckpt = torch.load(best_path, map_location=device, weights_only=True)
+                    model.load_state_dict(best_ckpt["model"])
+                    logger.log_audio_sample(best_ckpt["step"], model, val_loader, "best.pt")
+        except Exception:  # noqa: BLE001 — never let audio previews mask training errors
+            log.exception("Final checkpoint audio logging failed")
+        finally:
+            logger.close()
     log.info("Training complete in %.1f min", (time.time() - start) / 60.0)
 
 

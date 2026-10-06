@@ -91,11 +91,11 @@ def test_main_passes_pitch_encoder_options(monkeypatch: pytest.MonkeyPatch) -> N
     monkeypatch.setattr("polyddsp.infer.render_file", fake_render_file)
     main([
         "--ckpt", "run/best.pt", "--input", "in.wav", "--out", "out.wav",
-        "--pitch-encoder", "neutone-amt",
+        "--pitch-encoder", "neutone-amt-nonstreaming",
         "--pitch-encoder-checkpoint", "amt.onnx",
     ])
 
-    assert captured["pitch_encoder"] == "neutone-amt"
+    assert captured["pitch_encoder"] == "neutone-amt-nonstreaming"
     assert captured["pitch_encoder_checkpoint"] == "amt.onnx"
 
 
@@ -135,7 +135,7 @@ def test_neutone_pitch_features_use_shared_preprocess_path(
         cfg,
         target_frames=17,
         device="cpu",
-        pitch_encoder="neutone-amt",
+        pitch_encoder="neutone-amt-nonstreaming",
         pitch_encoder_checkpoint=model_path,
     )
 
@@ -156,7 +156,7 @@ def test_neutone_pitch_features_require_encoder_checkpoint() -> None:
         }},
     })
     with pytest.raises(SystemExit, match="pitch-encoder-checkpoint is required"):
-        pitch_features("in.wav", cfg, 10, pitch_encoder="neutone-amt")
+        pitch_features("in.wav", cfg, 10, pitch_encoder="neutone-amt-streaming")
 
 
 def test_render_single_block_matches_forward() -> None:

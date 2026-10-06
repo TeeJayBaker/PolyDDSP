@@ -31,7 +31,7 @@ def test_dataset_returns_pitch_velocity_when_bp_cache_present(tmp_path: Path) ->
     ds = RawAudioDataset(
         root=str(tmp_path), split="val", sample_rate=sr, clip_seconds=4.0,
         seed=0, file_glob="*.wav",
-        pitch_cache_kind="basic_pitch", pitch_cache_suffix=suffix,
+        pitch_cache_kind="basic-pitch", pitch_cache_suffix=suffix,
         f0_hop=hop, n_voices=n_voices,
     )
     item = ds[0]
@@ -56,7 +56,7 @@ def test_dataset_pads_when_file_shorter_than_window(tmp_path: Path) -> None:
     ds = RawAudioDataset(
         root=str(tmp_path), split="val", sample_rate=sr, clip_seconds=4.0,
         seed=0, file_glob="*.wav",
-        pitch_cache_kind="basic_pitch", pitch_cache_suffix=suffix,
+        pitch_cache_kind="basic-pitch", pitch_cache_suffix=suffix,
         f0_hop=hop, n_voices=n_voices,
     )
     item = ds[0]
@@ -70,7 +70,7 @@ def test_dataset_raises_clearly_when_bp_cache_missing(tmp_path: Path) -> None:
         RawAudioDataset(
             root=str(tmp_path), split="val", sample_rate=sr, clip_seconds=4.0,
             seed=0, file_glob="*.wav",
-            pitch_cache_kind="basic_pitch",
+            pitch_cache_kind="basic-pitch",
             pitch_cache_suffix=bp_cache_suffix(n_voices, sr, hop),
             f0_hop=hop, n_voices=n_voices,
         )
@@ -96,7 +96,7 @@ def test_dataset_reads_pitch_cache_from_separate_root(tmp_path: Path) -> None:
     ds = RawAudioDataset(
         root=str(root), split="val", sample_rate=sr, clip_seconds=4.0,
         seed=0, file_glob="**/*.wav",
-        pitch_cache_kind="basic_pitch", pitch_cache_suffix=suffix,
+        pitch_cache_kind="basic-pitch", pitch_cache_suffix=suffix,
         pitch_cache_root=str(cache_root), f0_hop=hop, n_voices=n_voices,
     )
 

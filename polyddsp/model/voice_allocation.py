@@ -5,6 +5,8 @@ the model's target frame rate. Voice slot IDs persist across notes.
 """
 from __future__ import annotations
 
+from dataclasses import dataclass
+
 import torch
 import torch.nn.functional as F
 
@@ -31,6 +33,55 @@ def _resample_bends_linear(bends: list[int], n_target: int) -> torch.Tensor:
     return out.view(n_target)
 
 
+@dataclass(frozen=True)
+class FrameNoteEvent:
+    """One note already projected onto the target frame grid."""
+
+    start: int
+    end: int
+    midi: int
+    pitch_hz: torch.Tensor
+    velocity: torch.Tensor
+
+
+def allocate_frame_events(
+    events: list[FrameNoteEvent],
+    n_voices: int,
+    target_frames: int,
+) -> tuple[torch.Tensor, torch.Tensor]:
+    """Allocate target-rate note trajectories into fixed monophonic voice slots."""
+    pitch = torch.zeros(n_voices, target_frames)
+    velocity = torch.zeros(n_voices, target_frames)
+
+    for event in sorted(events, key=lambda item: (item.start, item.end, item.midi)):
+        start = max(0, event.start)
+        end = min(target_frames, event.end)
+        if end <= start:
+            continue
+        source_start = start - event.start
+        source_end = source_start + end - start
+        if event.pitch_hz.numel() < source_end or event.velocity.numel() < source_end:
+            raise ValueError("frame note trajectory is shorter than its declared span")
+
+        chosen = next((voice for voice in range(n_voices) if pitch[voice, start] == 0), -1)
+        if chosen < 0:
+            slot_amps = velocity[:, start:end].mean(dim=-1)
+            chosen = int(torch.argmin(slot_amps).item())
+            old_end = end
+            for frame in range(end, target_frames):
+                if pitch[chosen, frame] != 0:
+                    old_end = frame + 1
+                else:
+                    break
+            pitch[chosen, start:old_end] = 0
+            velocity[chosen, start:old_end] = 0
+
+        pitch[chosen, start:end] = event.pitch_hz[source_start:source_end]
+        velocity[chosen, start:end] = event.velocity[source_start:source_end]
+
+    return pitch, velocity
+
+
 def allocate_to_voices(
     note_events: list[NoteEvent],
     note_grid_target: torch.Tensor,   # (F, T_target) at target rate
@@ -39,54 +90,30 @@ def allocate_to_voices(
     bp_to_target_ratio: float,        # = T_target / T_bp for this file
 ) -> tuple[torch.Tensor, torch.Tensor]:
     """Return (pitch, velocity) of shape (V, T_target) each."""
-    pitch = torch.zeros(n_voices, target_frames)
-    velocity = torch.zeros(n_voices, target_frames)
-
-    # Sort by start time so allocation is causal (FIFO is meaningful only with order).
-    events_sorted = sorted(note_events, key=lambda e: (e.start_bp, e.end_bp, e.midi))
-
-    for ev in events_sorted:
+    frame_events = []
+    for ev in note_events:
         s = max(0, int(round(ev.start_bp * bp_to_target_ratio)))
         e = min(target_frames, int(round(ev.end_bp * bp_to_target_ratio)))
         if e <= s:
             continue
         n_span = e - s
 
-        # Pick free voice; else evict lowest-mean-velocity.
-        chosen = -1
-        for v in range(n_voices):
-            if pitch[v, s] == 0:
-                chosen = v
-                break
-        if chosen < 0:
-            slot_amps = velocity[:, s:e].mean(dim=-1)
-            chosen = int(torch.argmin(slot_amps).item())
-            # Erase the evicted note's full extent past `e` so its tail doesn't
-            # reappear after the new (shorter) note ends — otherwise the slot
-            # contains [old_head | new | leftover_old_tail], a Frankensteined
-            # trajectory the synth has no audio basis to model.
-            old_end = e
-            for t in range(e, target_frames):
-                if pitch[chosen, t] != 0:
-                    old_end = t + 1
-                else:
-                    break
-            pitch[chosen, s:old_end] = 0
-            velocity[chosen, s:old_end] = 0
-
-        # Compute per-frame midi and Hz.
         if ev.bends is None:
             midi_per_frame = torch.full((n_span,), float(ev.midi))
         else:
             bend_target = _resample_bends_linear(ev.bends, n_span)
             midi_per_frame = float(ev.midi) + bend_target / CONTOURS_BINS_PER_SEMITONE
-        pitch[chosen, s:e] = _midi_to_hz(midi_per_frame)
-
-        # Per-frame velocity from note grid at target rate.
         freq_idx = ev.midi - MIDI_OFFSET
         if 0 <= freq_idx < note_grid_target.shape[0]:
-            velocity[chosen, s:e] = note_grid_target[freq_idx, s:e]
+            note_velocity = note_grid_target[freq_idx, s:e]
         else:
-            velocity[chosen, s:e] = ev.mean_amplitude
+            note_velocity = torch.full((n_span,), ev.mean_amplitude)
+        frame_events.append(FrameNoteEvent(
+            start=s,
+            end=e,
+            midi=ev.midi,
+            pitch_hz=_midi_to_hz(midi_per_frame),
+            velocity=note_velocity,
+        ))
 
-    return pitch, velocity
+    return allocate_frame_events(frame_events, n_voices, target_frames)

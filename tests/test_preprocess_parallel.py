@@ -8,16 +8,18 @@ import memex
 import pytest
 import torch
 
-from polyddsp import preprocess
+from polyddsp.preprocess import cli as preprocess
 
 
 def options_for(tmp_path, **overrides):
     values = dict(
         root=tmp_path,
-        backend="basic_pitch",
+        pitch_cache_source="basic-pitch",
+        backend="basic-pitch",
         model_path=None,
         output_dir=tmp_path / "cache",
         file_glob="*.wav",
+        midi_glob="**/*.midi",
         sample_rate=16_000,
         hop=64,
         n_voices=6,

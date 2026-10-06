@@ -36,6 +36,10 @@ results/*
 .vscode/
 *.swp
 
+# Machine-local Hydra settings (keep the example template)
+configs/local/*.yaml
+!configs/local/example.yaml
+
 # OS
 .DS_Store
 

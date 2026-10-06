@@ -16,6 +16,8 @@ from polyddsp.preprocess import (
     PreprocessOptions,
     precompute_one_neutone_amt,
     run_preprocess,
+    neutone_amt_source,
+    validate_neutone_amt_source,
     validate_preprocess_options,
 )
 
@@ -69,6 +71,16 @@ class FakeSession:
 
 def install_session(monkeypatch, session):
     monkeypatch.setattr(ort, "InferenceSession", lambda *args, **kwargs: session)
+
+
+def test_neutone_source_uses_model_structure_and_rejects_wrong_label():
+    streaming = SimpleNamespace(streaming=True)
+    nonstreaming = SimpleNamespace(streaming=False)
+    assert neutone_amt_source(streaming) == "neutone-amt-streaming"
+    assert neutone_amt_source(nonstreaming) == "neutone-amt-nonstreaming"
+    validate_neutone_amt_source(streaming, "neutone-amt-streaming")
+    with pytest.raises(ValueError, match="detected neutone-amt-streaming"):
+        validate_neutone_amt_source(streaming, "neutone-amt-nonstreaming")
 
 
 @pytest.mark.parametrize("baked,start,end", [("1", 25, 75), ("0", 15, 65)])
@@ -217,6 +229,7 @@ def test_runner_loads_onnx_once_for_multiple_files(monkeypatch, tmp_path):
         sf.write(tmp_path / name, np.zeros(44100, dtype=np.float32), 44100)
     run_preprocess(PreprocessOptions(
         root=tmp_path,
+        pitch_cache_source="neutone-amt-nonstreaming",
         backend="neutone",
         model_path=path,
         output_dir=tmp_path / "cache",
@@ -238,6 +251,7 @@ def test_runner_loads_onnx_once_for_multiple_files(monkeypatch, tmp_path):
 def test_config_explains_external_weights_path(tmp_path):
     options = PreprocessOptions(
         root=tmp_path,
+        pitch_cache_source="neutone-amt-nonstreaming",
         backend="neutone",
         model_path=Path("amt.onnx.data"),
         output_dir=None,

@@ -35,7 +35,11 @@ from omegaconf import DictConfig, OmegaConf
 from polyddsp.model.polyddsp import PolyDDSP
 from polyddsp.preprocess import load_resample
 
-_PITCH_ENCODERS = ("basic-pitch", "neutone-amt")
+_PITCH_ENCODERS = (
+    "basic-pitch",
+    "neutone-amt-streaming",
+    "neutone-amt-nonstreaming",
+)
 
 
 def _normalise_argv(argv: list[str]) -> list[str]:
@@ -116,11 +120,11 @@ def pitch_features(
             n_voices=cfg.experiment.model.n_voices,
             target_frames=target_frames,
         )
-    elif pitch_encoder == "neutone-amt":
+    elif pitch_encoder in ("neutone-amt-streaming", "neutone-amt-nonstreaming"):
         if pitch_encoder_checkpoint is None:
             raise SystemExit(
                 "--pitch-encoder-checkpoint is required when "
-                "--pitch-encoder=neutone-amt"
+                f"--pitch-encoder={pitch_encoder}"
             )
         pitch_encoder_checkpoint = Path(pitch_encoder_checkpoint)
         if pitch_encoder_checkpoint.suffix.lower() == ".data":
@@ -138,9 +142,14 @@ def pitch_features(
             audio_within_duration_limit,
             load_neutone_amt_model,
             neutone_amt_to_voices,
+            validate_neutone_amt_source,
         )
 
         amt_model = load_neutone_amt_model(pitch_encoder_checkpoint, device)
+        try:
+            validate_neutone_amt_source(amt_model, pitch_encoder)
+        except ValueError as exc:
+            raise SystemExit(str(exc)) from exc
         native_sr = int(getattr(
             amt_model.spec, "sample_rate", getattr(amt_model.spec, "sr", NEUTONE_NATIVE_SR),
         ))
@@ -252,7 +261,7 @@ def main(argv: list[str] | None = None) -> None:
     )
     p.add_argument(
         "--pitch-encoder-checkpoint", default=None,
-        help="Neutone Lightning checkpoint or ONNX export (required for neutone-amt)",
+        help="Neutone Lightning checkpoint or ONNX export (required for Neutone encoders)",
     )
     p.add_argument(
         "--chunk-frames", "--chunk_frames", dest="chunk_frames", type=int, default=None,

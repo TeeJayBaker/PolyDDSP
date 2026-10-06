@@ -6,15 +6,19 @@ from pathlib import Path
 import pytest
 import soundfile as sf
 import torch
+from symusic import ControlChange, Note, PitchBend, Score, Tempo, Track
 
 from polyddsp.preprocess import (
     MIDI_VELOCITY_64,
     bp_cache_suffix,
     cache_path_for,
+    ground_truth_cache_suffix,
+    precompute_one_ground_truth,
     neutone_cache_suffix,
     precompute_one_bp,
     precompute_one_neutone_amt,
 )
+from polyddsp.preprocess.ground_truth import midi_path_for
 
 
 def _make_chirp_wav(path: Path, duration_s: float = 6.0, sr: int = 16000) -> None:
@@ -33,7 +37,8 @@ def test_precompute_one_bp_writes_cache_with_correct_shape(tmp_path: Path) -> No
     assert recomputed
     assert cache.exists()
     blob = torch.load(cache, weights_only=True)
-    assert set(blob) == {"pitch", "velocity"}
+    assert set(blob) == {"pitch", "velocity", "pitch_cache_source"}
+    assert blob["pitch_cache_source"] == "basic-pitch"
     expected_target_frames = (16000 * 6) // 64
     assert blob["pitch"].shape == (4, expected_target_frames)
     assert blob["velocity"].shape == (4, expected_target_frames)
@@ -53,7 +58,114 @@ def test_bp_cache_suffix_includes_voices_sr_hop() -> None:
 
 
 def test_neutone_cache_suffix_includes_voices_sr_hop() -> None:
-    assert neutone_cache_suffix(6, 16000, 64) == "neutone_v6_sr16000_hop64"
+    assert (
+        neutone_cache_suffix("neutone-amt-streaming", 6, 16000, 64)
+        == "neutone_streaming_v6_sr16000_hop64"
+    )
+    assert (
+        neutone_cache_suffix("neutone-amt-nonstreaming", 6, 16000, 64)
+        == "neutone_nonstreaming_v6_sr16000_hop64"
+    )
+
+
+def test_ground_truth_cache_suffix_includes_voices_sr_hop() -> None:
+    assert (
+        ground_truth_cache_suffix(10, 16000, 64)
+        == "ground_truth_v10_sr16000_hop64"
+    )
+
+
+def test_ground_truth_glob_pairs_separate_directories_by_stem(tmp_path: Path) -> None:
+    audio = tmp_path / "audio" / "003_HSswc.wav"
+    midi = tmp_path / "midi" / "003_HSswc.mid"
+    audio.parent.mkdir()
+    midi.parent.mkdir()
+    audio.touch()
+    midi.touch()
+
+    assert midi_path_for(
+        audio,
+        dataset_root=tmp_path,
+        midi_glob="midi/**/*wc.mid",
+    ) == midi
+
+
+def test_ground_truth_finds_gaps_fine_aligned_file_excluded_by_glob(
+    tmp_path: Path,
+) -> None:
+    audio = tmp_path / "audio" / "Bc1wc.wav"
+    midi = tmp_path / "midi" / "Bc1wc-fine-aligned.mid"
+    audio.parent.mkdir()
+    midi.parent.mkdir()
+    audio.touch()
+    midi.touch()
+
+    # This is the GAPS glob, which does not itself match `-fine-aligned.mid`.
+    assert not list(tmp_path.glob("**/*wc.mid"))
+    assert midi_path_for(
+        audio,
+        dataset_root=tmp_path,
+        midi_glob="**/*wc.mid",
+    ) == midi
+
+
+@pytest.mark.parametrize("audio_suffix", ["mix", "mic", "hex", "hex_cln"])
+def test_ground_truth_glob_ignores_guitarset_audio_suffix(
+    tmp_path: Path, audio_suffix: str,
+) -> None:
+    audio = tmp_path / "audio" / f"04_BN3-154-E_solo_{audio_suffix}.wav"
+    midi = tmp_path / "midi" / "04_BN3-154-E_solo.mid"
+    audio.parent.mkdir()
+    midi.parent.mkdir()
+    audio.touch()
+    midi.touch()
+
+    assert midi_path_for(audio, dataset_root=tmp_path, midi_glob="**/*.mid") == midi
+
+
+def test_ground_truth_preserves_overlap_sustain_velocity_and_bends(tmp_path: Path) -> None:
+    audio = tmp_path / "piece.wav"
+    sf.write(audio, torch.zeros(16_000).numpy(), 16_000)
+
+    score = Score(480)
+    score.tempos.append(Tempo(0, 120))
+    track = Track()
+    track.notes.extend([
+        Note(0, 480, 60, 127),      # C4: 0.0–0.5 s
+        Note(240, 240, 64, 64),     # E4: 0.25–0.5 s, overlapping C4
+    ])
+    track.controls.extend([
+        ControlChange(240, 64, 127),  # sustain down at 0.25 s
+        ControlChange(720, 64, 0),    # sustain up at 0.75 s
+    ])
+    track.pitch_bends.extend([
+        PitchBend(240, 4096),       # +1 semitone with the default ±2 range
+        PitchBend(480, 0),
+    ])
+    score.tracks.append(track)
+    score.dump_midi(tmp_path / "piece.midi")
+
+    cache, recomputed = precompute_one_ground_truth(
+        audio, 16_000, 64, 4, dataset_root=tmp_path,
+    )
+    assert recomputed
+    blob = torch.load(cache, weights_only=True)
+    assert blob["pitch_cache_source"] == "ground-truth"
+    assert blob["pitch"].shape == (4, 250)
+
+    # Both notes occupy distinct voices during their overlap; no contour is dropped.
+    assert blob["pitch"][0, 63] == pytest.approx(277.1826, rel=1e-4)  # C#4 after bend
+    assert blob["pitch"][1, 63] == pytest.approx(349.2282, rel=1e-4)  # F4 after bend
+    assert blob["velocity"][0, 63] == pytest.approx(1.0)
+    assert blob["velocity"][1, 63] == pytest.approx(64 / 127)
+
+    # Sustain extends both through 0.75 s, while pitch bend resets at 0.5 s.
+    assert blob["pitch"][0, 150] == pytest.approx(261.6256, rel=1e-4)
+    assert blob["pitch"][1, 150] == pytest.approx(329.6276, rel=1e-4)
+    assert torch.all(blob["pitch"][:, 188:] == 0)
+    assert precompute_one_ground_truth(
+        audio, 16_000, 64, 4, dataset_root=tmp_path,
+    )[1] is False
 
 
 def test_cache_path_for_mirrors_nested_path_in_output_dir(tmp_path: Path) -> None:
@@ -104,6 +216,7 @@ def test_precompute_one_neutone_amt_uses_constant_midi_velocity(tmp_path: Path) 
 
     assert recomputed
     blob = torch.load(cache, weights_only=True)
+    assert blob["pitch_cache_source"] == "neutone-amt-nonstreaming"
     active = blob["pitch"] != 0
     assert active.any()
     assert torch.all(blob["velocity"][active] == MIDI_VELOCITY_64)

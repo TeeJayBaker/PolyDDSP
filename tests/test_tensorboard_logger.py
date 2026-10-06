@@ -93,10 +93,10 @@ def test_all_audio_previews(tmp_path, dict_batch, silent):
     ref = audio[0].numpy()
     dry = ref * 0.375
     clips = {
-        "val/audio_ref": ref, "val/audio_pred": ref,
-        "val/audio_harm": ref * 0.25, "val/audio_noise": ref * 0.125,
-        "val/audio_dry_mix_norm": dry / (np.abs(dry).max() + 1e-9) * 0.99,
-        "val/audio_wet": ref - dry,
+        "val/last.pt/audio_ref": ref, "val/last.pt/audio_pred": ref,
+        "val/last.pt/audio_harm": ref * 0.25, "val/last.pt/audio_noise": ref * 0.125,
+        "val/last.pt/audio_dry_mix_norm": dry / (np.abs(dry).max() + 1e-9) * 0.99,
+        "val/last.pt/audio_wet": ref - dry,
     }
     events = _events(tmp_path)
     assert set(events.Tags()["audio"]) == set(clips)
@@ -142,10 +142,29 @@ def test_training_config_has_tensorboard_overrides():
             "tensorboard.enabled=false", "tensorboard.flush_secs=5",
         ])
     assert default.tensorboard.enabled
+    assert default.device == "auto"
     assert default.tensorboard.flush_secs == 30
     assert "wandb" not in default
     assert not disabled.tensorboard.enabled
     assert disabled.tensorboard.flush_secs == 5
+
+
+def test_training_device_selection(monkeypatch):
+    monkeypatch.setattr(torch.cuda, "is_available", lambda: False)
+    assert training.resolve_device("auto") == "cpu"
+    assert training.resolve_device("cpu") == "cpu"
+    with pytest.raises(ValueError, match="CUDA is unavailable"):
+        training.resolve_device("cuda:0")
+
+    monkeypatch.setattr(torch.cuda, "is_available", lambda: True)
+    monkeypatch.setattr(torch.cuda, "device_count", lambda: 2)
+    assert training.resolve_device("auto") == "cuda"
+    assert training.resolve_device("cuda") == "cuda"
+    assert training.resolve_device("cuda:1") == "cuda:1"
+    with pytest.raises(ValueError, match="does not exist"):
+        training.resolve_device("cuda:2")
+    with pytest.raises(ValueError, match="expected auto, cpu, cuda, or cuda:N"):
+        training.resolve_device("mps")
 
 
 def test_training_loop_writes_all_summary_types(tmp_path, monkeypatch):
@@ -183,8 +202,16 @@ def test_training_loop_writes_all_summary_types(tmp_path, monkeypatch):
     assert [e.step for e in events.Scalars("val/mss")] == [0, 1, 2]
     assert [e.step for e in events.Scalars("val/fad")] == [1, 2]
     assert [e.step for e in events.Scalars("val/final/fad")] == [3]
-    assert len(events.Tags()["audio"]) == 6
-    for tag in events.Tags()["audio"]:
-        assert [e.step for e in events.Audio(tag)] == [0, 1, 2]
+    last_tags = [tag for tag in events.Tags()["audio"] if tag.startswith("val/last.pt/")]
+    best_tags = [tag for tag in events.Tags()["audio"] if tag.startswith("val/best.pt/")]
+    assert len(last_tags) == 6
+    assert len(best_tags) == 6
+    for tag in last_tags:
+        assert [e.step for e in events.Audio(tag)] == [0, 1, 2, 3]
+    for tag in best_tags:
+        assert [e.step for e in events.Audio(tag)] == [1]
+    best_pred, = events.Audio("val/best.pt/audio_pred")
+    last_pred = events.Audio("val/last.pt/audio_pred")[-1]
+    assert best_pred.encoded_audio_string != last_pred.encoded_audio_string
     assert (tmp_path / "last.pt").is_file()
     assert (tmp_path / "config.yaml").is_file()

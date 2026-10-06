@@ -93,6 +93,7 @@ def main(cfg: DictConfig) -> None:
     pitch_cache_kind, pitch_cache_suffix, n_voices_for_cache = resolve_pitch_cache(
         cfg, source=cfg.experiment.dataset.get("pitch_cache_source", "basic-pitch"),
     )
+    pitch_cache_source = cfg.experiment.dataset.get("pitch_cache_source", "basic-pitch")
 
     val_ds = RawAudioDataset(
         root=cfg.experiment.dataset.root,
@@ -102,6 +103,7 @@ def main(cfg: DictConfig) -> None:
         seed=cfg.run.seed,
         file_glob=cfg.experiment.dataset.file_glob,
         pitch_cache_kind=pitch_cache_kind,
+        pitch_cache_source=pitch_cache_source,
         pitch_cache_suffix=pitch_cache_suffix,
         pitch_cache_root=cfg.experiment.dataset.get("pitch_cache_root"),
         f0_hop=cfg.model.frame_hop,
