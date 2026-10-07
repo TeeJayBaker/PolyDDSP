@@ -66,6 +66,7 @@ train:
   eval_full_every: 100000   # the FAD/CLAP battery is expensive; fire it once at the final step
   ckpt_keep_top_k: 3
   z_warmup:
+    enabled: false
     block_pct: 40
     ramp_pct: 10
 tensorboard:

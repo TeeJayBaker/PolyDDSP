@@ -183,7 +183,7 @@ def test_training_loop_writes_all_summary_types(tmp_path, monkeypatch):
             super().__init__()
             self.gain = torch.nn.Parameter(torch.tensor(0.5))
 
-        def forward(self, audio):
+        def forward(self, audio, z_scale=1.0):
             pred = audio * self.gain
             return pred, {"audio_harm": pred, "audio_noise": torch.zeros_like(pred)}
 

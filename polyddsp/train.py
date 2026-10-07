@@ -83,6 +83,23 @@ def _unwrap(batch: Any) -> tuple[torch.Tensor, dict]:
     return batch, {}
 
 
+@dc.dataclass(frozen=True)
+class ZScaleScheduler:
+    total_steps: int
+    block_pct: float
+    ramp_pct: float
+
+    def __call__(self, step: int) -> float:
+        """Scale z from 0 to 1 after an initial blocked portion of training."""
+        block_end = self.total_steps * self.block_pct / 100
+        ramp_end = block_end + self.total_steps * self.ramp_pct / 100
+        if step < block_end:
+            return 0.0
+        if step >= ramp_end or ramp_end == block_end:
+            return 1.0
+        return (step - block_end) / (ramp_end - block_end)
+
+
 def train_step(
     model: PolyDDSP,
     batch: Any,
@@ -90,6 +107,7 @@ def train_step(
     opt: torch.optim.Optimizer,
     sched: torch.optim.lr_scheduler.LRScheduler | None = None,
     grad_clip: float = 1.0,
+    z_scale: float = 1.0,
 ) -> torch.Tensor:
     model.train()
     device = next(model.parameters()).device
@@ -98,7 +116,7 @@ def train_step(
     for k, v in model_kwargs.items():
         if isinstance(v, torch.Tensor):
             model_kwargs[k] = v.to(device)
-    audio_pred, _ = model(audio, **model_kwargs)
+    audio_pred, _ = model(audio, z_scale=z_scale, **model_kwargs)
     loss = loss_fn(audio_pred, audio)
     opt.zero_grad(set_to_none=True)
     loss.backward()
@@ -485,6 +503,13 @@ def main(cfg: DictConfig) -> None:
         sched = CosineAnnealingWarmRestarts(opt, T_0=cfg.schedule.T_0, T_mult=cfg.schedule.T_mult)
     else:
         raise ValueError(f"unknown schedule.type: {sched_type}")
+    zscheduler = None
+    if cfg.train.z_warmup.enabled:
+        zscheduler = ZScaleScheduler(
+            total_steps=cfg.train.steps,
+            block_pct=cfg.train.z_warmup.block_pct,
+            ramp_pct=cfg.train.z_warmup.ramp_pct,
+        )
     loss_fn = MultiScaleSpectral()
 
     state = TrainState.resume_or_init(cfg, model, opt, sched)
@@ -531,7 +556,15 @@ def main(cfg: DictConfig) -> None:
     )
     try:
         for batch in _infinite(train_loader):
-            loss = train_step(model, batch, loss_fn, opt, sched, grad_clip=cfg.train.grad_clip)
+            loss = train_step(
+                model,
+                batch,
+                loss_fn,
+                opt,
+                sched,
+                grad_clip=cfg.train.grad_clip,
+                z_scale=zscheduler(state.step) if zscheduler is not None else 1.0,
+            )
             # Logging every step costs a CUDA sync (`loss.item()`) + summary write
             # + jsonl.flush; serialised against the next iter's H2D copy. Gate on
             # `train.log_every` so the GPU stays pipelined.

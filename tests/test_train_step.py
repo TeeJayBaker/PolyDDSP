@@ -5,7 +5,7 @@ import torch
 
 from polyddsp.losses import MultiScaleSpectral
 from polyddsp.model.polyddsp import PolyDDSP
-from polyddsp.train import train_step
+from polyddsp.train import ZScaleScheduler, train_step
 
 
 def _tiny_model(pitch_source: str = "basic_pitch") -> PolyDDSP:
@@ -38,3 +38,11 @@ def test_train_step_handles_dict_batch(four_s_sine: torch.Tensor) -> None:
     }
     loss = train_step(model, batch, loss_fn, opt, grad_clip=1.0)
     assert torch.isfinite(loss)
+
+
+def test_z_scale_scheduler() -> None:
+    scheduler = ZScaleScheduler(total_steps=10_000, block_pct=40, ramp_pct=10)
+    assert scheduler(0) == 0.0
+    assert scheduler(4_000) == 0.0
+    assert scheduler(4_500) == 0.5
+    assert scheduler(5_000) == 1.0
