@@ -10,19 +10,20 @@ import torch
 from polyddsp.data import RawAudioDataset, _load_bp_cache_cached
 from polyddsp.preprocess import (
     cache_path_for,
+    pitch_cache_root_for,
     preprocess_options_from_cfg,
     resolve_pitch_cache,
 )
 
 
-@pytest.mark.parametrize("experiment", ["guitarset", "maestro"])
+@pytest.mark.parametrize("experiment", ["guitarset", "gaps", "maestro"])
 @pytest.mark.parametrize(
     "source,expected_kind,prefix",
     [
         ("basic-pitch", "basic-pitch", "bp"),
-        ("neutone-amt-streaming", "neutone", "neutone_streaming"),
-        ("neutone-amt-nonstreaming", "neutone", "neutone_nonstreaming"),
-        ("ground-truth", "ground_truth", "ground_truth"),
+        ("neutone-amt-streaming", "neutone-amt-streaming", "neutone_streaming"),
+        ("neutone-amt-nonstreaming", "neutone-amt-nonstreaming", "neutone_nonstreaming"),
+        ("ground-truth", "ground-truth", "ground_truth"),
     ],
 )
 def test_config_selects_cache_for_training_and_validation(
@@ -32,7 +33,7 @@ def test_config_selects_cache_for_training_and_validation(
     with initialize_config_dir(version_base=None, config_dir=str(config_dir)):
         cfg = compose(config_name="config", overrides=[
             f"experiment={experiment}",
-            f"experiment.dataset.pitch_cache_source={source}",
+            f"run.pitch_cache_source={source}",
         ])
     kind, suffix, voices = resolve_pitch_cache(
         cfg, source=cfg.experiment.dataset.pitch_cache_source,
@@ -44,7 +45,8 @@ def test_config_selects_cache_for_training_and_validation(
     root.mkdir()
     frames = cfg.model.sr // cfg.model.frame_hop
     for index in range(5):
-        audio = root / f"{index}_mix.wav"
+        filename = f"{index}wc.wav" if experiment == "gaps" else f"{index}_mix.wav"
+        audio = root / filename
         sf.write(audio, torch.zeros(cfg.model.sr).numpy(), cfg.model.sr)
         cache = cache_path_for(audio, suffix, root=root, output_dir=cache_root)
         cache.parent.mkdir(exist_ok=True)
@@ -82,6 +84,7 @@ def test_legacy_config_defaults_to_basic_pitch():
 
 @pytest.mark.parametrize("experiment,voices,file_glob,midi_glob", [
     ("guitarset", 6, "**/*_mix.wav", "**/*.mid"),
+    ("gaps", 6, "**/*wc.wav", "**/*wc.mid"),
     ("maestro", 10, "**/*.wav", "**/*.midi"),
 ])
 def test_preprocess_hydra_config_uses_experiment_values(
@@ -143,6 +146,34 @@ def test_preprocess_hydra_config_uses_experiment_values(
         preprocess_options_from_cfg(cfg)
 
 
+@pytest.mark.parametrize("experiment", ["guitarset", "gaps", "maestro"])
+@pytest.mark.parametrize(
+    "source",
+    [
+        "basic-pitch",
+        "neutone-amt-streaming",
+        "neutone-amt-nonstreaming",
+        "ground-truth",
+    ],
+)
+def test_default_cache_layout_is_source_then_experiment(experiment, source):
+    config_dir = Path(__file__).resolve().parents[1] / "configs"
+    with initialize_config_dir(version_base=None, config_dir=str(config_dir)):
+        train_cfg = compose(config_name="config", overrides=[
+            f"experiment={experiment}",
+            f"run.pitch_cache_source={source}",
+        ])
+        preprocess_cfg = compose(config_name="preprocess", overrides=[
+            f"experiment={experiment}",
+            f"model={source}",
+        ])
+
+    expected = Path(train_cfg.run.cache_root) / source / experiment
+    assert Path(train_cfg.experiment.dataset.pitch_cache_root) == expected
+    assert Path(preprocess_cfg.output_dir) == expected
+    assert pitch_cache_root_for(train_cfg.run.cache_root, source, experiment) == expected
+
+
 def test_ground_truth_preprocess_config_has_midi_controls(tmp_path):
     config_dir = Path(__file__).resolve().parents[1] / "configs"
     with initialize_config_dir(version_base=None, config_dir=str(config_dir)):
@@ -161,24 +192,24 @@ def test_ground_truth_preprocess_config_has_midi_controls(tmp_path):
 
 
 @pytest.mark.parametrize(
-    "profile,experiment,dataset_suffix,cache_suffix,steps,device_key,voices,prompt",
+    "profile,experiment,dataset_suffix,steps,device_key,voices,prompt",
     [
         (
             "guitarset", "guitarset", "guitarset/audio_mono-pickup_mix",
-            "guitarset", 10_000, "guitarset", 6, "solo acoustic guitar",
+            10_000, "guitarset", 6, "solo acoustic guitar",
         ),
         (
             "gaps", "gaps", "gaps",
-            "gaps", 10_000, "gaps", 6, "solo classical guitar",
+            10_000, "gaps", 6, "solo classical guitar",
         ),
         (
             "maestro", "maestro", "MAESTRO/maestro-v3.0.0",
-            "MAESTRO", 20_000, "maestro", 10, "solo grand piano",
+            20_000, "maestro", 10, "solo grand piano",
         ),
     ],
 )
 def test_training_profile_uses_local_machine_roots(
-    profile, experiment, dataset_suffix, cache_suffix, steps, device_key, voices, prompt,
+    profile, experiment, dataset_suffix, steps, device_key, voices, prompt,
 ):
     config_dir = Path(__file__).resolve().parents[1] / "configs"
     with initialize_config_dir(version_base=None, config_dir=str(config_dir)):
@@ -188,7 +219,9 @@ def test_training_profile_uses_local_machine_roots(
         ])
     assert cfg.experiment.name == experiment
     assert Path(cfg.experiment.dataset.root) == Path(cfg.run.data_root) / dataset_suffix
-    assert Path(cfg.experiment.dataset.pitch_cache_root) == Path(cfg.run.cache_root) / cache_suffix
+    assert Path(cfg.experiment.dataset.pitch_cache_root) == (
+        Path(cfg.run.cache_root) / cfg.run.pitch_cache_source / experiment
+    )
     assert cfg.experiment.dataset.pitch_cache_source == cfg.run.pitch_cache_source
     assert cfg.experiment.model.n_voices == voices
     assert cfg.experiment.metrics.clap_prompt == prompt
@@ -201,12 +234,15 @@ def test_training_profile_uses_local_machine_roots(
 
 def test_missing_neutone_cache_suggests_matching_preprocessing(tmp_path):
     sf.write(tmp_path / "fake.wav", torch.zeros(16000).numpy(), 16000)
-    with pytest.raises(FileNotFoundError, match="model_path"):
+    with pytest.raises(FileNotFoundError, match="model_path") as error:
         RawAudioDataset(
-            root=str(tmp_path), split="val", pitch_cache_kind="neutone",
+            root=str(tmp_path), split="val", pitch_cache_kind="neutone-amt-streaming",
             pitch_cache_source="neutone-amt-streaming",
             pitch_cache_suffix="neutone_streaming_v6_sr16000_hop64", n_voices=6,
         )
+    expected = tmp_path / "fake.wav.neutone_streaming_v6_sr16000_hop64.f0.pt"
+    assert f"First missing cache: {expected}" in str(error.value)
+    assert f"(for audio: {tmp_path / 'fake.wav'})" in str(error.value)
 
 
 def test_cache_metadata_rejects_source_mismatch_but_allows_legacy(tmp_path):
@@ -219,7 +255,7 @@ def test_cache_metadata_rejects_source_mismatch_but_allows_legacy(tmp_path):
     source = "neutone-amt-streaming"
     ds_kwargs = dict(
         root=str(root), split="val", sample_rate=16000, clip_seconds=1,
-        file_glob="*.wav", pitch_cache_kind="neutone",
+        file_glob="*.wav", pitch_cache_kind="neutone-amt-streaming",
         pitch_cache_source=source, pitch_cache_suffix=suffix,
         f0_hop=64, n_voices=1,
     )

@@ -12,23 +12,29 @@ import torch
 from hydra import compose, initialize_config_dir
 from omegaconf import OmegaConf
 from tensorboard.backend.event_processing.event_accumulator import EventAccumulator
+from tensorboard.plugins.custom_scalar import layout_pb2
 
 import polyddsp.train as training
+from polyddsp.midi_synthesis import synthesize_midi
 from polyddsp.train import TensorBoardLogger
 
 
 def _config(enabled=True):
     return OmegaConf.create({
         "tensorboard": {"enabled": enabled, "flush_secs": 30},
-        "model": {"sr": 16000},
+        "model": {"sr": 16000, "frame_hop": 64},
         "sample_rate_copy": "${model.sr}",
     })
 
 
 def _events(out_dir):
     return EventAccumulator(str(out_dir / "tensorboard"), size_guidance={
-        "scalars": 0, "audio": 0, "tensors": 0,
+        "scalars": 0, "audio": 0, "images": 0, "tensors": 0,
     }).Reload()
+
+
+def _component_rms_events(out_dir, component):
+    return _events(out_dir).Scalars(f"val/component_rms/{component}")
 
 
 def test_scalars_config_and_jsonl(tmp_path):
@@ -72,7 +78,15 @@ class _AudioModel(torch.nn.Module):
         assert not self.training
         assert audio.shape[0] == 1
         self.seen_kwargs = kwargs
-        return audio * self.gain, {"audio_harm": audio * 0.25, "audio_noise": audio * 0.125}
+        frames = audio.shape[-1] // 64
+        pitch = kwargs.get("pitch", audio.new_full((1, 1, frames), 440.0))
+        velocity = kwargs.get("velocity", audio.new_ones(1, 1, frames))
+        return audio * self.gain, {
+            "audio_harm": audio * 0.25,
+            "audio_noise": audio * 0.125,
+            "pitch": pitch,
+            "velocity": velocity,
+        }
 
 
 @pytest.mark.parametrize("dict_batch", [False, True])
@@ -82,23 +96,49 @@ def test_all_audio_previews(tmp_path, dict_batch, silent):
     batch = {"audio": audio, "pitch": torch.ones(2, 1, 3), "velocity": torch.ones(2, 1, 3)} if dict_batch else audio
     model = _AudioModel()
     logger = TensorBoardLogger(_config(), tmp_path)
-    logger.log_audio_sample(7, model, [batch])
+    logger.log_audio_sample(
+        7, model, [batch], log_conditioning=True,
+        z_scale=0.25, noise_scale=0.5,
+    )
     logger.close()
     if dict_batch:
         assert model.seen_kwargs["pitch"].shape == (1, 1, 3)
         assert model.seen_kwargs["velocity"].shape == (1, 1, 3)
     else:
-        assert model.seen_kwargs == {}
+        assert set(model.seen_kwargs) == {"z_scale", "noise_scale"}
+    assert model.seen_kwargs["z_scale"] == 0.25
+    assert model.seen_kwargs["noise_scale"] == 0.5
 
     ref = audio[0].numpy()
     dry = ref * 0.375
+    frames = audio.shape[-1] // 64
+    pitch = batch["pitch"][:1] if dict_batch else torch.full((1, 1, frames), 440.0)
+    velocity = batch["velocity"][:1] if dict_batch else torch.ones(1, 1, frames)
+    midi = synthesize_midi(
+        pitch, velocity, sample_rate=16000, frame_hop=64, n_samples=audio.shape[-1],
+    )[0].numpy()
     clips = {
         "val/last.pt/audio_ref": ref, "val/last.pt/audio_pred": ref,
         "val/last.pt/audio_harm": ref * 0.25, "val/last.pt/audio_noise": ref * 0.125,
         "val/last.pt/audio_dry_mix_norm": dry / (np.abs(dry).max() + 1e-9) * 0.99,
         "val/last.pt/audio_wet": ref - dry,
+        "val/conditioning/synthesized_midi": midi,
     }
     events = _events(tmp_path)
+    assert "custom_scalars__config__" in events.Tags()["tensors"]
+    layout_event, = events.Tensors("custom_scalars__config__")
+    layout = layout_pb2.Layout.FromString(layout_event.tensor_proto.string_val[0])
+    charts = {
+        (category.title, chart.title): list(chart.multiline.tag)
+        for category in layout.category
+        for chart in category.chart
+    }
+    assert charts == {
+        ("Training", "Warmup scales"): ["train/z_scale", "train/noise_scale"],
+        ("Validation", "Component RMS"): [
+            "val/component_rms/harmonic", "val/component_rms/noise",
+        ],
+    }
     assert set(events.Tags()["audio"]) == set(clips)
     for tag, expected in clips.items():
         event, = events.Audio(tag)
@@ -108,6 +148,20 @@ def test_all_audio_previews(tmp_path, dict_batch, silent):
         decoded, sr = sf.read(io.BytesIO(event.encoded_audio_string))
         assert sr == 16000
         np.testing.assert_allclose(decoded, expected.clip(-1, 1), atol=2 / 32768)
+    image, = events.Images("val/conditioning/pitches")
+    assert image.step == 7
+    assert image.width == pitch.shape[-1]
+    assert image.height == 256
+    harmonic_rms, = _component_rms_events(tmp_path, "harmonic")
+    noise_rms, = _component_rms_events(tmp_path, "noise")
+    assert (harmonic_rms.step, harmonic_rms.value) == pytest.approx(
+        (7, float(torch.sqrt(torch.mean((audio[0] * 0.25) ** 2))))
+    )
+    assert (noise_rms.step, noise_rms.value) == pytest.approx(
+        (7, float(torch.sqrt(torch.mean((audio[0] * 0.125) ** 2))))
+    )
+    assert not (tmp_path / "tensorboard" / "val_component_rms_harmonic").exists()
+    assert not (tmp_path / "tensorboard" / "val_component_rms_noise").exists()
 
 
 def test_disabled_keeps_jsonl_without_audio_inference(tmp_path):
@@ -183,17 +237,23 @@ def test_training_loop_writes_all_summary_types(tmp_path, monkeypatch):
             super().__init__()
             self.gain = torch.nn.Parameter(torch.tensor(0.5))
 
-        def forward(self, audio, z_scale=1.0):
+        def forward(self, audio, z_scale=1.0, noise_scale=1.0):
             pred = audio * self.gain
-            return pred, {"audio_harm": pred, "audio_noise": torch.zeros_like(pred)}
+            frames = audio.shape[-1] // 64
+            return pred, {
+                "audio_harm": pred,
+                "audio_noise": torch.zeros_like(pred),
+                "pitch": audio.new_full((audio.shape[0], 1, frames), 440.0),
+                "velocity": audio.new_ones(audio.shape[0], 1, frames),
+            }
 
     monkeypatch.setattr(training.PolyDDSP, "from_cfg", lambda cfg: TinyModel())
     monkeypatch.setattr(training, "MultiScaleSpectral", torch.nn.L1Loss)
     loader = [torch.linspace(-1, 1, 160).repeat(2, 1)]
     monkeypatch.setattr(training, "_make_loader", lambda *args, **kwargs: loader)
     monkeypatch.setattr(training, "DataLoader", lambda *args, **kwargs: loader)
-    monkeypatch.setattr(training, "_evaluate_cheap", lambda *args: {"mss": 0.5})
-    monkeypatch.setattr(training, "_evaluate_full", lambda *args: {"fad": 0.75})
+    monkeypatch.setattr(training, "_evaluate_cheap", lambda *args, **kwargs: {"mss": 0.5})
+    monkeypatch.setattr(training, "_evaluate_full", lambda *args, **kwargs: {"fad": 0.75})
 
     training.main.__wrapped__(cfg)
 
@@ -210,6 +270,12 @@ def test_training_loop_writes_all_summary_types(tmp_path, monkeypatch):
         assert [e.step for e in events.Audio(tag)] == [0, 1, 2, 3]
     for tag in best_tags:
         assert [e.step for e in events.Audio(tag)] == [1]
+    conditioning, = events.Audio("val/conditioning/synthesized_midi")
+    assert conditioning.step == 3
+    pitch_image, = events.Images("val/conditioning/pitches")
+    assert pitch_image.step == 3
+    assert [e.step for e in _component_rms_events(tmp_path, "harmonic")] == [0, 1, 2, 3]
+    assert [e.step for e in _component_rms_events(tmp_path, "noise")] == [0, 1, 2, 3]
     best_pred, = events.Audio("val/best.pt/audio_pred")
     last_pred = events.Audio("val/last.pt/audio_pred")[-1]
     assert best_pred.encoded_audio_string != last_pred.encoded_audio_string

@@ -7,6 +7,25 @@ from pathlib import Path
 
 import torch
 
+PITCH_CACHE_SOURCES = (
+    "basic-pitch",
+    "neutone-amt-streaming",
+    "neutone-amt-nonstreaming",
+    "ground-truth",
+)
+
+
+def pitch_cache_root_for(
+    cache_root: str | Path,
+    source: str,
+    experiment: str,
+) -> Path:
+    """Return the canonical ``data/<source>/<experiment>`` cache root."""
+    if source not in PITCH_CACHE_SOURCES:
+        expected = ", ".join(PITCH_CACHE_SOURCES)
+        raise ValueError(f"Unknown pitch cache source {source!r}; expected {expected}")
+    return Path(cache_root) / source / experiment
+
 
 def save_pitch_cache(
     cache: Path,
@@ -56,16 +75,9 @@ def resolve_pitch_cache(
     cfg, source: str = "basic-pitch",
 ) -> tuple[str | None, str | None, int | None]:
     """Return the cache kind, filename suffix, and voice count for a config."""
-    if source not in (
-        "basic-pitch",
-        "neutone-amt-streaming",
-        "neutone-amt-nonstreaming",
-        "ground-truth",
-    ):
-        raise ValueError(
-            f"Unknown pitch cache source {source!r}; expected basic-pitch, "
-            "neutone-amt-streaming, neutone-amt-nonstreaming, or ground-truth"
-        )
+    if source not in PITCH_CACHE_SOURCES:
+        expected = ", ".join(PITCH_CACHE_SOURCES)
+        raise ValueError(f"Unknown pitch cache source {source!r}; expected {expected}")
     if cfg.experiment.model.get("pitch_source") != "cached_basic_pitch":
         return None, None, None
 
@@ -78,5 +90,5 @@ def resolve_pitch_cache(
     if source == "basic-pitch":
         return "basic-pitch", basic_pitch.cache_suffix(n_voices, sample_rate, hop), n_voices
     if source in ("neutone-amt-streaming", "neutone-amt-nonstreaming"):
-        return "neutone", neutone_amt.cache_suffix(source, n_voices, sample_rate, hop), n_voices
-    return "ground_truth", ground_truth.cache_suffix(n_voices, sample_rate, hop), n_voices
+        return source, neutone_amt.cache_suffix(source, n_voices, sample_rate, hop), n_voices
+    return "ground-truth", ground_truth.cache_suffix(n_voices, sample_rate, hop), n_voices

@@ -93,10 +93,13 @@ def test_main_passes_pitch_encoder_options(monkeypatch: pytest.MonkeyPatch) -> N
         "--ckpt", "run/best.pt", "--input", "in.wav", "--out", "out.wav",
         "--pitch-encoder", "neutone-amt-nonstreaming",
         "--pitch-encoder-checkpoint", "amt.onnx",
+        "--z-scale", "0.25", "--noise-scale", "0.5",
     ])
 
     assert captured["pitch_encoder"] == "neutone-amt-nonstreaming"
     assert captured["pitch_encoder_checkpoint"] == "amt.onnx"
+    assert captured["z_scale"] == 0.25
+    assert captured["noise_scale"] == 0.5
 
 
 def test_neutone_pitch_features_use_shared_preprocess_path(
@@ -256,6 +259,29 @@ def test_render_multi_block_matches_single_block_with_noise() -> None:
     assert (one - other).abs().max().item() > 1e-5
 
 
+def test_render_uses_checkpoint_scales_and_allows_overrides() -> None:
+    model = _tiny_model(use_noise=True, use_z=True)
+    model.inference_z_scale = 0.25
+    model.inference_noise_scale = 0.5
+    audio, pitch, velocity = _cond(SR)
+    n_frames = audio.shape[-1] // HOP
+
+    torch.manual_seed(1234)
+    ref, _ = model(audio, pitch=pitch, velocity=velocity)
+    torch.manual_seed(1234)
+    got = model.render(
+        audio, pitch=pitch, velocity=velocity, chunk_frames=n_frames + 1,
+    )
+    assert torch.allclose(got, ref, atol=1e-5)
+
+    torch.manual_seed(1234)
+    full = model.render(
+        audio, pitch=pitch, velocity=velocity, chunk_frames=n_frames + 1,
+        z_scale=1.0, noise_scale=1.0,
+    )
+    assert (full - got).abs().max().item() > 1e-5
+
+
 def test_decode_block_matches_voice_decoder() -> None:
     """`PolyDDSP._decode_block` must be `VoiceDecoder.forward` plus GRU threading.
 
@@ -288,11 +314,17 @@ def test_render_length_matches_non_frame_aligned_input() -> None:
     assert torch.isfinite(out).all()
 
 
-def _write_run_dir(tmp_path: Path, model: PolyDDSP) -> Path:
+def _write_run_dir(
+    tmp_path: Path,
+    model: PolyDDSP,
+    *,
+    checkpoint: dict | None = None,
+    train: dict | None = None,
+) -> Path:
     """A minimal run directory: `best.pt` + the `config.yaml` train.py writes."""
     run = tmp_path / "run"
     run.mkdir()
-    torch.save({"model": model.state_dict()}, run / "best.pt")
+    torch.save(checkpoint or {"model": model.state_dict()}, run / "best.pt")
     kw = _tiny_kwargs()
     cfg = OmegaConf.create({
         # `${now:...}` is a Hydra-only resolver: keeping it here proves load_run
@@ -314,8 +346,47 @@ def _write_run_dir(tmp_path: Path, model: PolyDDSP) -> Path:
             },
         },
     })
+    if train is not None:
+        cfg.train = train
     OmegaConf.save(cfg, run / "config.yaml")
     return run
+
+
+def test_load_run_uses_explicit_checkpoint_scales(tmp_path: Path) -> None:
+    from polyddsp.infer import load_run
+
+    source = _tiny_model()
+    run = _write_run_dir(
+        tmp_path,
+        source,
+        checkpoint={
+            "model": source.state_dict(),
+            "step": 8_500,
+            "render_scales": {"z_scale": 0.25, "noise_scale": 0.75},
+        },
+    )
+    loaded, _ = load_run(run / "best.pt")
+    assert loaded.inference_z_scale == 0.25
+    assert loaded.inference_noise_scale == 0.75
+
+
+def test_load_run_recovers_legacy_scales_from_step_and_config(tmp_path: Path) -> None:
+    from polyddsp.infer import load_run
+
+    source = _tiny_model()
+    run = _write_run_dir(
+        tmp_path,
+        source,
+        checkpoint={"model": source.state_dict(), "step": 8_500},
+        train={
+            "steps": 10_000,
+            "z_warmup": {"enabled": True, "block_pct": 80, "ramp_pct": 10},
+            "noise_warmup": {"enabled": True, "block_pct": 80, "ramp_pct": 10},
+        },
+    )
+    loaded, _ = load_run(run / "best.pt")
+    assert loaded.inference_z_scale == 0.5
+    assert loaded.inference_noise_scale == 0.5
 
 
 def test_main_end_to_end(tmp_path: Path) -> None:

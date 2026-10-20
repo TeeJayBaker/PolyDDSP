@@ -56,6 +56,11 @@ class PolyDDSP(nn.Module):
         self.use_z = use_z
         self.use_reverb = use_reverb
         self.use_noise = use_noise
+        # `load_run()` replaces these with the scales at which a checkpoint was
+        # evaluated. They are ordinary attributes rather than state-dict buffers,
+        # so bare and legacy model state dicts remain loadable without missing keys.
+        self.inference_z_scale = 1.0
+        self.inference_noise_scale = 1.0
 
         self.pitch_encoder = PitchEncoder(
             sr=sr,
@@ -124,6 +129,7 @@ class PolyDDSP(nn.Module):
         loudness: torch.Tensor,
         z: torch.Tensor | None,
         z_scale: float | None = 1.0,
+        noise_scale: float = 1.0,
     ) -> tuple[torch.Tensor, dict]:
         """Decoder and synthesisers for a block of frames, before reverb.
 
@@ -132,6 +138,8 @@ class PolyDDSP(nn.Module):
             velocity: (B, V, T_frames) in [0, 1]
             loudness: (B, T_frames) normalised A-weighted loudness
             z:        (B, T_frames, z_dim) or None when `use_z=False`
+            noise_scale: Multiplier on synthesized noise audio. At zero the
+                noise branch contributes neither signal nor upstream gradient.
 
         Returns `(mix, parts)` where `mix` is the dry harmonic+noise sum
         `(B, T_frames * frame_hop)` and `parts` holds the intermediates that
@@ -165,6 +173,7 @@ class PolyDDSP(nn.Module):
             T_samples = noise_v.shape[-1]
             audio_noise = noise_v.reshape(B, V, T_samples).sum(dim=1)
             audio_noise = audio_noise[..., : audio_harm.shape[-1]]
+            audio_noise = audio_noise * noise_scale
         else:
             audio_noise = torch.zeros_like(audio_harm)
 
@@ -186,6 +195,7 @@ class PolyDDSP(nn.Module):
         z: torch.Tensor | None,
         h_0: torch.Tensor | None,
         n_core: int,
+        z_scale: float = 1.0,
     ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
         """`VoiceDecoder.forward` with the GRU's hidden state threaded through.
 
@@ -226,7 +236,7 @@ class PolyDDSP(nn.Module):
         feats.append(dec.loud_mlp(feat_in[..., idx:idx + 1]))
         idx += 1
         if dec.use_z:
-            feats.append(dec.z_mlp(feat_in[..., idx:]))
+            feats.append(dec.z_mlp(feat_in[..., idx:]) * z_scale)
         cat = torch.cat(feats, dim=-1)
 
         gru_core, h_n = dec.gru(cat[:, :n_core], h_0)
@@ -269,11 +279,18 @@ class PolyDDSP(nn.Module):
         audio: torch.Tensor,
         pitch: torch.Tensor | None = None,
         velocity: torch.Tensor | None = None,
-        z_scale: float | None = 1.0
+        z_scale: float | None = None,
+        noise_scale: float | None = None,
     ) -> tuple[torch.Tensor, dict]:
+        if z_scale is None:
+            z_scale = self.inference_z_scale
+        if noise_scale is None:
+            noise_scale = self.inference_noise_scale
         pitch, velocity, loudness, z, bp_post = self._conditioning(audio, pitch, velocity)
 
-        mix, parts = self._synthesise(pitch, velocity, loudness, z, z_scale)
+        mix, parts = self._synthesise(
+            pitch, velocity, loudness, z, z_scale, noise_scale,
+        )
 
         out = self.reverb(mix) if self.use_reverb else mix
         out = out[..., : audio.shape[-1]]
@@ -295,6 +312,8 @@ class PolyDDSP(nn.Module):
         pitch: torch.Tensor | None = None,
         velocity: torch.Tensor | None = None,
         chunk_frames: int = 1000,
+        z_scale: float | None = None,
+        noise_scale: float | None = None,
     ) -> torch.Tensor:
         """Resynthesise arbitrary-length audio without a whole-file synth pass.
 
@@ -343,6 +362,9 @@ class PolyDDSP(nn.Module):
                 `pitch_source="cached_basic_pitch"`.
             chunk_frames: frames of audio synthesised per block. The default
                 1000 frames is 4 s at 16 kHz / hop 64 — the training horizon.
+            z_scale, noise_scale: Optional overrides for the checkpoint's saved
+                inference scales. Fresh models and legacy checkpoints without a
+                recoverable warmup schedule default to 1.0.
         Returns:
             (B, T) — the same length as `audio`. Because synthesis works on whole
             frames, a trailing partial frame (`T % frame_hop`) is emitted as
@@ -350,6 +372,10 @@ class PolyDDSP(nn.Module):
         """
         if chunk_frames < 1:
             raise ValueError(f"chunk_frames must be >= 1, got {chunk_frames}")
+        if z_scale is None:
+            z_scale = self.inference_z_scale
+        if noise_scale is None:
+            noise_scale = self.inference_noise_scale
 
         from polyddsp.model.parity_ops import scale_f0_hz
 
@@ -379,6 +405,7 @@ class PolyDDSP(nn.Module):
                 z_block,
                 h,
                 n_core,
+                z_scale,
             )
             noise_mag_blocks.append(noise_mags[:, :, :n_core, :])
             # Stash frame `end-1` before prepending: it is the next block's look-behind.
@@ -407,7 +434,7 @@ class PolyDDSP(nn.Module):
             _, V, T_frames, n_bands = noise_mags.shape
             noise_v = self.noise_synth(noise_mags.reshape(B * V, T_frames, n_bands))
             audio_noise = noise_v.reshape(B, V, -1).sum(dim=1)
-            dry = dry + audio_noise[..., :T_out]
+            dry = dry + audio_noise[..., :T_out] * noise_scale
 
         out = self.reverb(dry) if self.use_reverb else dry
         T_in = audio.shape[-1]

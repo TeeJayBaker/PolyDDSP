@@ -247,14 +247,17 @@ def run_preprocess(options: PreprocessOptions) -> int:
         )
     else:
         suffix = ground_truth.cache_suffix(options.n_voices, options.sample_rate, options.hop)
-    print(f"found {len(files)} files; caching {options.backend} allocation with suffix={suffix}")
+    print(
+        f"found {len(files)} files; caching {options.pitch_cache_source} "
+        f"allocation with suffix={suffix}"
+    )
 
     started = time.perf_counter()
     if not options.parallel:
         model = _load_pitch_model(options, options.device)
         if model is not None:
             print(
-                f"loaded {options.backend} in {time.perf_counter() - started:.2f}s "
+                f"loaded {options.pitch_cache_source} in {time.perf_counter() - started:.2f}s "
                 "(reused for all files)"
             )
         results = ((path, _precompute_file(path, options, model, options.device)[1]) for path in files)

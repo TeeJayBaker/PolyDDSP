@@ -2,12 +2,11 @@
 experiment:
   name: guitarset
   dataset:
-    root: ${run.data_root}/guitarset
+    root: ${run.data_root}/guitarset/audio_mono-pickup_mix
     file_glob: "**/*_mix.wav"
     midi_glob: "**/*.mid"
-    # null keeps the legacy sidecar layout; set this to use a separate cache tree.
-    pitch_cache_root: null
-    pitch_cache_source: basic-pitch  # basic-pitch | neutone-amt-streaming | neutone-amt-nonstreaming | ground-truth
+    pitch_cache_root: ${run.cache_root}/${run.pitch_cache_source}/guitarset
+    pitch_cache_source: ${run.pitch_cache_source}
 
   model:
     n_voices: 6

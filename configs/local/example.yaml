@@ -3,8 +3,8 @@
 # default.yaml is ignored by Git and is loaded automatically when present.
 run:
   data_root: /path/to/datasets
-  cache_root: ./data/ground-truth
-  pitch_cache_source: null # basic-pitch | neutone-amt-streaming | neutone-amt-nonstreaming | ground-truth
+  cache_root: ./data
+  pitch_cache_source: basic-pitch # basic-pitch | neutone-amt-streaming | neutone-amt-nonstreaming | ground-truth
   devices:
     guitarset: cuda:0
     gaps: cuda:0

@@ -13,8 +13,10 @@ run:
   seed: 0
   out_dir: ${oc.env:POLYDDSP_OUT_DIR,outputs}/${run.name}
   data_root: ${oc.env:POLYDDSP_DATA_DIR,/data/polyddsp}
-  cache_root: ${oc.env:POLYDDSP_CACHE_DIR,./data/ground-truth}
-  pitch_cache_source: null  # selected in ignored local/default.yaml or on the CLI
+  # Base directory for all pitch caches. Each source owns one child directory:
+  # data/<pitch-cache-source>/<experiment>/...
+  cache_root: ${oc.env:POLYDDSP_CACHE_DIR,./data}
+  pitch_cache_source: basic-pitch
   devices:
     guitarset: auto
     gaps: auto
@@ -69,6 +71,12 @@ train:
     enabled: false
     block_pct: 40
     ramp_pct: 10
+  # Independent gate on the synthesized noise waveform. By default it follows
+  # the z warmup exactly, but every value can be overridden separately.
+  noise_warmup:
+    enabled: ${train.z_warmup.enabled}
+    block_pct: ${train.z_warmup.block_pct}
+    ramp_pct: ${train.z_warmup.ramp_pct}
 tensorboard:
   enabled: true        # false disables event files/audio; log.jsonl is still written
   flush_secs: 30       # background event-file flush interval

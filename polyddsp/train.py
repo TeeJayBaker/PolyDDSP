@@ -20,6 +20,7 @@ from tqdm.auto import tqdm
 
 from polyddsp.data import RawAudioDataset
 from polyddsp.losses import MultiScaleSpectral
+from polyddsp.midi_synthesis import render_pitch_image, synthesize_midi
 from polyddsp.model.polyddsp import PolyDDSP
 from polyddsp.preprocess import resolve_pitch_cache
 
@@ -84,13 +85,13 @@ def _unwrap(batch: Any) -> tuple[torch.Tensor, dict]:
 
 
 @dc.dataclass(frozen=True)
-class ZScaleScheduler:
+class WarmupScaleScheduler:
     total_steps: int
     block_pct: float
     ramp_pct: float
 
     def __call__(self, step: int) -> float:
-        """Scale z from 0 to 1 after an initial blocked portion of training."""
+        """Scale one synthesis path from 0 to 1 after an initial block."""
         block_end = self.total_steps * self.block_pct / 100
         ramp_end = block_end + self.total_steps * self.ramp_pct / 100
         if step < block_end:
@@ -98,6 +99,13 @@ class ZScaleScheduler:
         if step >= ramp_end or ramp_end == block_end:
             return 1.0
         return (step - block_end) / (ramp_end - block_end)
+
+
+ZScaleScheduler = WarmupScaleScheduler  # Backward-compatible import name.
+
+
+def _scale_at(scheduler: WarmupScaleScheduler | None, step: int) -> float:
+    return scheduler(step) if scheduler is not None else 1.0
 
 
 def train_step(
@@ -108,6 +116,7 @@ def train_step(
     sched: torch.optim.lr_scheduler.LRScheduler | None = None,
     grad_clip: float = 1.0,
     z_scale: float = 1.0,
+    noise_scale: float = 1.0,
 ) -> torch.Tensor:
     model.train()
     device = next(model.parameters()).device
@@ -116,7 +125,9 @@ def train_step(
     for k, v in model_kwargs.items():
         if isinstance(v, torch.Tensor):
             model_kwargs[k] = v.to(device)
-    audio_pred, _ = model(audio, z_scale=z_scale, **model_kwargs)
+    audio_pred, _ = model(
+        audio, z_scale=z_scale, noise_scale=noise_scale, **model_kwargs,
+    )
     loss = loss_fn(audio_pred, audio)
     opt.zero_grad(set_to_none=True)
     loss.backward()
@@ -177,7 +188,16 @@ class TrainState:
         OmegaConf.save(cfg, out_dir / "config.yaml")
         return state
 
-    def save(self, path: Path, model: PolyDDSP, opt: torch.optim.Optimizer, sched) -> None:
+    def save(
+        self,
+        path: Path,
+        model: PolyDDSP,
+        opt: torch.optim.Optimizer,
+        sched,
+        *,
+        z_scale: float,
+        noise_scale: float,
+    ) -> None:
         torch.save(
             {
                 "model": model.state_dict(),
@@ -186,6 +206,10 @@ class TrainState:
                 "step": self.step,
                 "best_metric": self.best_metric,
                 "best_step": self.best_step,
+                "render_scales": {
+                    "z_scale": float(z_scale),
+                    "noise_scale": float(noise_scale),
+                },
             },
             path,
         )
@@ -200,11 +224,24 @@ class TopKCheckpoint:
         self.k = k
         self.entries: list[tuple[float, int, Path]] = []
 
-    def maybe_save(self, state: TrainState, model, opt, sched, metric_value: float) -> bool:
+    def maybe_save(
+        self,
+        state: TrainState,
+        model,
+        opt,
+        sched,
+        metric_value: float,
+        *,
+        z_scale: float,
+        noise_scale: float,
+    ) -> bool:
         if any(metric_value >= e[0] for e in self.entries) and len(self.entries) >= self.k:
             return False
         path = self.out_dir / f"top_{state.step:08d}.pt"
-        state.save(path, model, opt, sched)
+        state.save(
+            path, model, opt, sched,
+            z_scale=z_scale, noise_scale=noise_scale,
+        )
         self.entries.append((metric_value, state.step, path))
         self.entries.sort(key=lambda e: e[0])
         if len(self.entries) > self.k:
@@ -217,7 +254,10 @@ class TopKCheckpoint:
             state.best_metric = metric_value
             state.best_step = state.step
             best = self.out_dir / "best.pt"
-            state.save(best, model, opt, sched)
+            state.save(
+                best, model, opt, sched,
+                z_scale=z_scale, noise_scale=noise_scale,
+            )
         return True
 
 
@@ -241,12 +281,42 @@ class TensorBoardLogger:
                 "config", f"```yaml\n{OmegaConf.to_yaml(cfg, resolve=True)}```",
                 global_step=purge_step or 0,
             )
+            self.writer.add_custom_scalars({
+                "Training": {
+                    "Warmup scales": [
+                        "Multiline",
+                        ["train/z_scale", "train/noise_scale"],
+                    ],
+                },
+                "Validation": {
+                    "Component RMS": [
+                        "Multiline",
+                        [
+                            "val/component_rms/harmonic",
+                            "val/component_rms/noise",
+                        ],
+                    ],
+                },
+            })
         self.jsonl = (out_dir / "log.jsonl").open("a")
 
-    def log_step(self, step: int, loss: torch.Tensor) -> None:
+    def log_step(
+        self,
+        step: int,
+        loss: torch.Tensor,
+        *,
+        z_scale: float | None = None,
+        noise_scale: float | None = None,
+    ) -> None:
         payload = {"step": step, "loss": float(loss.item())}
+        if z_scale is not None:
+            payload["train/z_scale"] = float(z_scale)
+        if noise_scale is not None:
+            payload["train/noise_scale"] = float(noise_scale)
         if self.writer is not None:
-            self.writer.add_scalar("loss", payload["loss"], global_step=step)
+            for tag, value in payload.items():
+                if tag != "step":
+                    self.writer.add_scalar(tag, value, global_step=step)
         self.jsonl.write(json.dumps(payload) + "\n")
         self.jsonl.flush()
 
@@ -265,6 +335,10 @@ class TensorBoardLogger:
         model: PolyDDSP,
         val_loader: DataLoader,
         checkpoint_label: str = "last.pt",
+        log_conditioning: bool = False,
+        log_component_rms: bool = True,
+        z_scale: float = 1.0,
+        noise_scale: float = 1.0,
     ) -> None:
         if self.writer is None:
             return
@@ -278,7 +352,12 @@ class TensorBoardLogger:
             for k, v in model_kwargs.items():
                 if isinstance(v, torch.Tensor):
                     model_kwargs[k] = v.to(device)[:1]
-            pred, aux = model(audio, **model_kwargs)
+            pred, aux = model(
+                audio,
+                z_scale=z_scale,
+                noise_scale=noise_scale,
+                **model_kwargs,
+            )
         sr = self.cfg.model.sr
         T = pred.shape[-1]
         harm = aux["audio_harm"][0, :T]
@@ -289,6 +368,17 @@ class TensorBoardLogger:
         dry_mix_norm = dry_mix / (max(abs(dry_mix.max()), abs(dry_mix.min())) + 1e-9) * 0.99
         # The reverb returns dry + wet, so pred - dry_mix is the 100% wet tail.
         wet_only = (pred[0].cpu().numpy() - dry_mix)
+        if log_component_rms:
+            self.writer.add_scalar(
+                "val/component_rms/harmonic",
+                harm.square().mean().sqrt().item(),
+                global_step=step,
+            )
+            self.writer.add_scalar(
+                "val/component_rms/noise",
+                noise.square().mean().sqrt().item(),
+                global_step=step,
+            )
         prefix = f"val/{checkpoint_label}"
         clips = {
             f"{prefix}/audio_ref": audio[0].cpu().numpy(),
@@ -298,6 +388,19 @@ class TensorBoardLogger:
             f"{prefix}/audio_dry_mix_norm": dry_mix_norm,
             f"{prefix}/audio_wet": wet_only,
         }
+        if log_conditioning:
+            clips["val/conditioning/synthesized_midi"] = synthesize_midi(
+                aux["pitch"][:1],
+                aux["velocity"][:1],
+                sample_rate=sr,
+                frame_hop=self.cfg.model.frame_hop,
+                n_samples=T,
+            )[0].cpu().numpy()
+            self.writer.add_image(
+                "val/conditioning/pitches",
+                render_pitch_image(aux["pitch"][0], aux["velocity"][0]),
+                global_step=step,
+            )
         for tag, clip in clips.items():
             # Match the old PCM WAV previews: clip overloads, but retain the
             # relative levels of all stems except the explicitly normalized mix.
@@ -336,7 +439,15 @@ def _infinite(loader: DataLoader):
             yield batch
 
 
-def _evaluate_cheap(model, val_loader, sr: int, primary: list[str]) -> dict[str, float]:
+def _evaluate_cheap(
+    model,
+    val_loader,
+    sr: int,
+    primary: list[str],
+    *,
+    z_scale: float = 1.0,
+    noise_scale: float = 1.0,
+) -> dict[str, float]:
     """Run cheap per-sample metrics across the val loader and return mean values."""
     from polyddsp.metrics.clap import clap_cos
     from polyddsp.metrics.loudness import loudness_l1
@@ -373,7 +484,12 @@ def _evaluate_cheap(model, val_loader, sr: int, primary: list[str]) -> dict[str,
             for k, v in model_kwargs.items():
                 if isinstance(v, torch.Tensor):
                     model_kwargs[k] = v.to(device)
-            pred, _ = model(audio, **model_kwargs)
+            pred, _ = model(
+                audio,
+                z_scale=z_scale,
+                noise_scale=noise_scale,
+                **model_kwargs,
+            )
             for k in cheap_set:
                 vals = fns[k](audio, pred, sr=sr)
                 for name, arr in vals.items():
@@ -386,6 +502,9 @@ def _evaluate_full(
     loaders: list[DataLoader],
     sr: int,
     primary: list[str],
+    *,
+    z_scale: float = 1.0,
+    noise_scale: float = 1.0,
 ) -> dict[str, float]:
     """Pooled distributional metrics (CLAP-FD, FAD) across all provided loaders.
 
@@ -422,7 +541,12 @@ def _evaluate_full(
                 for k, v in model_kwargs.items():
                     if isinstance(v, torch.Tensor):
                         model_kwargs[k] = v.to(device)
-                pred, _ = model(audio, **model_kwargs)
+                pred, _ = model(
+                    audio,
+                    z_scale=z_scale,
+                    noise_scale=noise_scale,
+                    **model_kwargs,
+                )
                 pooled_refs.append(audio.cpu())
                 pooled_gens.append(pred.cpu())
                 # Convention: last loader = val (see main()).
@@ -503,12 +627,19 @@ def main(cfg: DictConfig) -> None:
         sched = CosineAnnealingWarmRestarts(opt, T_0=cfg.schedule.T_0, T_mult=cfg.schedule.T_mult)
     else:
         raise ValueError(f"unknown schedule.type: {sched_type}")
-    zscheduler = None
+    z_scheduler = None
     if cfg.train.z_warmup.enabled:
-        zscheduler = ZScaleScheduler(
+        z_scheduler = WarmupScaleScheduler(
             total_steps=cfg.train.steps,
             block_pct=cfg.train.z_warmup.block_pct,
             ramp_pct=cfg.train.z_warmup.ramp_pct,
+        )
+    noise_scheduler = None
+    if cfg.train.noise_warmup.enabled:
+        noise_scheduler = WarmupScaleScheduler(
+            total_steps=cfg.train.steps,
+            block_pct=cfg.train.noise_warmup.block_pct,
+            ramp_pct=cfg.train.noise_warmup.ramp_pct,
         )
     loss_fn = MultiScaleSpectral()
 
@@ -543,9 +674,17 @@ def main(cfg: DictConfig) -> None:
     # pitches; if pitches don't match, the cache is wrong.
     if state.step == 0:
         log.info("running step-0 eval before training")
-        step0_metrics = _evaluate_cheap(model, val_loader, cfg.model.sr, primary)
+        z_scale = _scale_at(z_scheduler, state.step)
+        noise_scale = _scale_at(noise_scheduler, state.step)
+        step0_metrics = _evaluate_cheap(
+            model, val_loader, cfg.model.sr, primary,
+            z_scale=z_scale, noise_scale=noise_scale,
+        )
         logger.log_metrics(state.step, step0_metrics, prefix="val/")
-        logger.log_audio_sample(state.step, model, val_loader)
+        logger.log_audio_sample(
+            state.step, model, val_loader,
+            z_scale=z_scale, noise_scale=noise_scale,
+        )
 
     progress = tqdm(
         total=cfg.train.steps,
@@ -556,6 +695,8 @@ def main(cfg: DictConfig) -> None:
     )
     try:
         for batch in _infinite(train_loader):
+            z_scale = _scale_at(z_scheduler, state.step)
+            noise_scale = _scale_at(noise_scheduler, state.step)
             loss = train_step(
                 model,
                 batch,
@@ -563,25 +704,42 @@ def main(cfg: DictConfig) -> None:
                 opt,
                 sched,
                 grad_clip=cfg.train.grad_clip,
-                z_scale=zscheduler(state.step) if zscheduler is not None else 1.0,
+                z_scale=z_scale,
+                noise_scale=noise_scale,
             )
             # Logging every step costs a CUDA sync (`loss.item()`) + summary write
             # + jsonl.flush; serialised against the next iter's H2D copy. Gate on
             # `train.log_every` so the GPU stays pipelined.
             if state.step % cfg.train.log_every == 0:
-                logger.log_step(state.step, loss)
+                logger.log_step(
+                    state.step, loss,
+                    z_scale=z_scale, noise_scale=noise_scale,
+                )
                 progress.set_postfix(loss=f"{loss.item():.4f}")
 
             if state.step > 0 and state.step % cfg.train.eval_cheap_every == 0:
-                metrics = _evaluate_cheap(model, val_loader, cfg.model.sr, primary)
+                metrics = _evaluate_cheap(
+                    model, val_loader, cfg.model.sr, primary,
+                    z_scale=z_scale, noise_scale=noise_scale,
+                )
                 logger.log_metrics(state.step, metrics, prefix="val/")
-                logger.log_audio_sample(state.step, model, val_loader)
-                ckpt.maybe_save(state, model, opt, sched, metrics["mss"])
-                state.save(out_dir / "last.pt", model, opt, sched)
+                logger.log_audio_sample(
+                    state.step, model, val_loader,
+                    z_scale=z_scale, noise_scale=noise_scale,
+                )
+                ckpt.maybe_save(
+                    state, model, opt, sched, metrics["mss"],
+                    z_scale=z_scale, noise_scale=noise_scale,
+                )
+                state.save(
+                    out_dir / "last.pt", model, opt, sched,
+                    z_scale=z_scale, noise_scale=noise_scale,
+                )
 
             if state.step > 0 and state.step % cfg.train.eval_full_every == 0:
                 full_metrics = _evaluate_full(
                     model, [eval_train_loader, val_loader], cfg.model.sr, primary,
+                    z_scale=z_scale, noise_scale=noise_scale,
                 )
                 if full_metrics:
                     logger.log_metrics(state.step, full_metrics, prefix="val/")
@@ -598,11 +756,22 @@ def main(cfg: DictConfig) -> None:
                 break
     finally:
         progress.close()
-        state.save(out_dir / "last.pt", model, opt, sched)
+        state.save(
+            out_dir / "last.pt", model, opt, sched,
+            z_scale=_scale_at(z_scheduler, state.step),
+            noise_scale=_scale_at(noise_scheduler, state.step),
+        )
         # Always log a final full eval on the last checkpoint so CLAP/FAD aren't
         # tied solely to the eval_full_every cadence.
         try:
-            final = _evaluate_full(model, [eval_train_loader, val_loader], cfg.model.sr, primary)
+            final = _evaluate_full(
+                model,
+                [eval_train_loader, val_loader],
+                cfg.model.sr,
+                primary,
+                z_scale=_scale_at(z_scheduler, state.step),
+                noise_scale=_scale_at(noise_scheduler, state.step),
+            )
             if final:
                 logger.log_metrics(state.step, final, prefix="val/final/")
         except Exception:  # noqa: BLE001 — never let final eval mask training errors
@@ -611,12 +780,36 @@ def main(cfg: DictConfig) -> None:
             # Explicit end-of-training previews make the final and best checkpoint
             # audible without relying on the periodic evaluation cadence.
             if logger.writer is not None:
-                logger.log_audio_sample(state.step, model, val_loader, "last.pt")
+                logger.log_audio_sample(
+                    state.step,
+                    model,
+                    val_loader,
+                    "last.pt",
+                    log_conditioning=True,
+                    z_scale=_scale_at(z_scheduler, state.step),
+                    noise_scale=_scale_at(noise_scheduler, state.step),
+                )
                 best_path = out_dir / "best.pt"
                 if best_path.exists():
                     best_ckpt = torch.load(best_path, map_location=device, weights_only=True)
                     model.load_state_dict(best_ckpt["model"])
-                    logger.log_audio_sample(best_ckpt["step"], model, val_loader, "best.pt")
+                    saved_scales = best_ckpt.get("render_scales")
+                    if isinstance(saved_scales, dict):
+                        best_z_scale = float(saved_scales["z_scale"])
+                        best_noise_scale = float(saved_scales["noise_scale"])
+                    else:
+                        # Legacy checkpoints have a step but no explicit scale metadata.
+                        best_z_scale = _scale_at(z_scheduler, best_ckpt["step"])
+                        best_noise_scale = _scale_at(noise_scheduler, best_ckpt["step"])
+                    logger.log_audio_sample(
+                        best_ckpt["step"],
+                        model,
+                        val_loader,
+                        "best.pt",
+                        log_component_rms=False,
+                        z_scale=best_z_scale,
+                        noise_scale=best_noise_scale,
+                    )
         except Exception:  # noqa: BLE001 — never let audio previews mask training errors
             log.exception("Final checkpoint audio logging failed")
         finally:

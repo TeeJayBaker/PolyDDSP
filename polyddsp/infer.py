@@ -42,6 +42,39 @@ _PITCH_ENCODERS = (
 )
 
 
+def _scheduled_scale(cfg: DictConfig, schedule_name: str, step: int) -> float:
+    """Recover one legacy checkpoint scale from its saved run config."""
+    if "train" not in cfg or schedule_name not in cfg.train:
+        return 1.0
+    schedule = cfg.train[schedule_name]
+    if not schedule.get("enabled", False):
+        return 1.0
+    total_steps = float(cfg.train.steps)
+    block_end = total_steps * float(schedule.block_pct) / 100
+    ramp_end = block_end + total_steps * float(schedule.ramp_pct) / 100
+    if step < block_end:
+        return 0.0
+    if step >= ramp_end or ramp_end == block_end:
+        return 1.0
+    return (step - block_end) / (ramp_end - block_end)
+
+
+def _checkpoint_render_scales(state: object, cfg: DictConfig) -> tuple[float, float]:
+    """Read explicit scales, or reconstruct them for an older wrapped checkpoint."""
+    if not isinstance(state, dict) or "model" not in state:
+        return 1.0, 1.0
+    saved = state.get("render_scales")
+    if isinstance(saved, dict):
+        return float(saved["z_scale"]), float(saved["noise_scale"])
+    if "step" not in state:
+        return 1.0, 1.0
+    step = int(state["step"])
+    return (
+        _scheduled_scale(cfg, "z_warmup", step),
+        _scheduled_scale(cfg, "noise_warmup", step),
+    )
+
+
 def _normalise_argv(argv: list[str]) -> list[str]:
     """Rewrite Hydra-style `key=value` tokens as `--key value`.
 
@@ -88,9 +121,11 @@ def load_run(ckpt_path: str | Path, device: str = "cpu") -> tuple[PolyDDSP, Dict
     model = PolyDDSP.from_cfg(cfg)
 
     state = torch.load(ckpt_path, map_location="cpu", weights_only=True)
-    if isinstance(state, dict) and "model" in state:
-        state = state["model"]
-    model.load_state_dict(state)
+    z_scale, noise_scale = _checkpoint_render_scales(state, cfg)
+    model_state = state["model"] if isinstance(state, dict) and "model" in state else state
+    model.load_state_dict(model_state)
+    model.inference_z_scale = z_scale
+    model.inference_noise_scale = noise_scale
     return model.to(device).eval(), cfg
 
 
@@ -187,6 +222,8 @@ def render_file(
     chunk_frames: int | None = None,
     pitch_encoder: str = "basic-pitch",
     pitch_encoder_checkpoint: str | Path | None = None,
+    z_scale: float | None = None,
+    noise_scale: float | None = None,
 ) -> None:
     """Resynthesise one audio file through a checkpoint and write the result.
 
@@ -196,6 +233,8 @@ def render_file(
     """
     device = device or ("cuda" if torch.cuda.is_available() else "cpu")
     model, cfg = load_run(ckpt, device)
+    effective_z_scale = model.inference_z_scale if z_scale is None else z_scale
+    effective_noise_scale = model.inference_noise_scale if noise_scale is None else noise_scale
 
     sr = int(cfg.model.sr)
     hop = int(cfg.model.frame_hop)
@@ -225,6 +264,8 @@ def render_file(
     out = model.render(
         audio.unsqueeze(0).to(device),
         chunk_frames=chunk_frames,
+        z_scale=z_scale,
+        noise_scale=noise_scale,
         **feats,
     )
 
@@ -240,7 +281,8 @@ def render_file(
     print(
         f"rendered {n_frames * hop / sr:.2f}s @ {sr} Hz "
         f"({n_frames} frames, {n_blocks} block(s), V={cfg.experiment.model.n_voices}, "
-        f"pitch_encoder={pitch_encoder}, device={device}) -> {out_path}"
+        f"pitch_encoder={pitch_encoder}, z_scale={effective_z_scale:g}, "
+        f"noise_scale={effective_noise_scale:g}, device={device}) -> {out_path}"
     )
 
 
@@ -267,6 +309,14 @@ def main(argv: list[str] | None = None) -> None:
         "--chunk-frames", "--chunk_frames", dest="chunk_frames", type=int, default=None,
         help="frames of audio synthesised per block (default: cfg.model.clip_seconds worth)",
     )
+    p.add_argument(
+        "--z-scale", "--z_scale", dest="z_scale", type=float, default=None,
+        help="override the checkpoint's saved z scale",
+    )
+    p.add_argument(
+        "--noise-scale", "--noise_scale", dest="noise_scale", type=float, default=None,
+        help="override the checkpoint's saved noise scale",
+    )
     args = p.parse_args(_normalise_argv(list(sys.argv[1:] if argv is None else argv)))
 
     render_file(
@@ -277,6 +327,8 @@ def main(argv: list[str] | None = None) -> None:
         chunk_frames=args.chunk_frames,
         pitch_encoder=args.pitch_encoder,
         pitch_encoder_checkpoint=args.pitch_encoder_checkpoint,
+        z_scale=args.z_scale,
+        noise_scale=args.noise_scale,
     )
 
 

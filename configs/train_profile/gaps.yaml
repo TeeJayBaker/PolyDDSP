@@ -8,12 +8,6 @@ device: ${run.devices.gaps}
 run:
   fresh: true
 
-experiment:
-  dataset:
-    root: ${run.data_root}/gaps
-    pitch_cache_root: ${run.cache_root}/gaps
-    pitch_cache_source: ${run.pitch_cache_source}
-
 train:
   steps: 10000
   batch_size: 2

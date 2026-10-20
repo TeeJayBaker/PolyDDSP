@@ -28,6 +28,7 @@ Key modules: `polyddsp/model/polyddsp.py` (top level), `decoder.py`,
 ```bash
 uv sync
 export POLYDDSP_DATA_DIR=/path/to/data      # datasets, default /data/polyddsp
+export POLYDDSP_CACHE_DIR=/path/to/cache    # cache base, default ./data
 export POLYDDSP_OUT_DIR=/path/to/runs       # run outputs, default outputs/
 ```
 
@@ -35,11 +36,10 @@ export POLYDDSP_OUT_DIR=/path/to/runs       # run outputs, default outputs/
 
 | Dataset | Download | Path under `$POLYDDSP_DATA_DIR` |
 |---|---|---|
-| GuitarSet | [zenodo 3371780](https://zenodo.org/records/3371780) (`audio_mono-pickup_mix.zip`) | `guitarset/**/*_mix.wav` |
-| MAESTRO | [magenta.tensorflow.org](https://magenta.tensorflow.org/datasets/maestro) | `maestro/bach_2018/**/*.wav` |
+| GuitarSet | [zenodo 3371780](https://zenodo.org/records/3371780) (`audio_mono-pickup_mix.zip`) | `guitarset/audio_mono-pickup_mix/*_mix.wav` |
+| MAESTRO | [magenta.tensorflow.org](https://magenta.tensorflow.org/datasets/maestro) | `MAESTRO/maestro-v3.0.0/**/*.wav` |
 
-MAESTRO is restricted to `bach_2018` to keep the piano and recording
-environment consistent. Files are split 80/20 train/val from `run.seed`.
+Files are split 80/20 train/val from `run.seed`.
 
 ## Usage
 
@@ -83,6 +83,26 @@ available and CPU otherwise. Select a GPU explicitly with, for example,
 `polyddsp-train experiment=guitarset device=cuda:1`; use `device=cpu` to force CPU.
 As usual, CUDA indices refer to the devices visible through `CUDA_VISIBLE_DEVICES`.
 
+The experimental warmup can gate z conditioning and synthesized noise
+independently. Noise warmup follows the z warmup timing by default, so this
+enables both with a 40% blocked phase and a 10% ramp:
+
+```bash
+polyddsp-train train_profile=guitarset train.z_warmup.enabled=true
+```
+
+Override `train.noise_warmup.enabled`, `block_pct`, or `ramp_pct` to separate
+the schedules. `noise_scale=0` is applied to the final noise waveform, giving
+the noise branch zero output and zero reconstruction gradient. TensorBoard logs
+both schedules as `train/z_scale` and `train/noise_scale`.
+
+Each checkpoint stores the z and noise scales used when it was evaluated.
+Inference and standalone evaluation reuse those scales, so a `best.pt` selected
+during the ramp reproduces that checkpoint rather than silently enabling both
+paths fully. Use `--z-scale` and `--noise-scale` with `polyddsp-infer` to override
+the saved values deliberately. Older checkpoints recover their scales from the
+saved step and the run's adjacent `config.yaml`.
+
 Inference uses Basic Pitch by default. To transcribe with Neutone AMT instead,
 select it and provide the same kind of Lightning checkpoint or ONNX export used
 by preprocessing:
@@ -97,22 +117,32 @@ polyddsp-infer --ckpt outputs/<run>/best.pt --input clip.wav --out resynth.wav \
 not read or write a pitch-cache sidecar. The live transcription is passed
 directly to PolyDDSP regardless of the checkpoint's configured pitch source.
 
-By default preprocessing writes each cache beside its source audio. To keep the
-dataset untouched, add `output_dir=preprocessed/guitarset`. When
-training or evaluating, read those caches with
-`experiment.dataset.pitch_cache_root=preprocessed/guitarset`. Nested paths are
-preserved beneath the separate output directory. `output_dir=null`
-keeps the default of writing beside the source audio.
+Pitch caches use one layout everywhere:
+
+```text
+data/<pitch-cache-source>/<experiment>/...
+```
+
+The four independent source namespaces are `basic-pitch`,
+`neutone-amt-streaming`, `neutone-amt-nonstreaming`, and `ground-truth`.
+Preprocessing derives its output directory from `model` and the experiment;
+training derives the same directory from `run.pitch_cache_source`. Relative
+paths beneath the dataset root are preserved inside the experiment directory.
+Set `run.cache_root=/another/cache/root` to move the whole cache tree. Only set
+`output_dir=null` when intentionally writing legacy sidecars beside source
+audio.
 
 To preprocess with Neutone AMT, pass a Lightning checkpoint or an ONNX export:
 
 ```bash
 polyddsp-preprocess experiment=guitarset \
-    data_root=/media/ssd2/data/guitarset/audio_mono-pickup_mix \
-    output_dir=./data/neutone-amt/guitarset \
     model=neutone-amt-nonstreaming \
     model_path=./checkpoints/NeutoneAMT/amt.onnx
 ```
+
+This writes to `./data/neutone-amt-nonstreaming/guitarset` by default. The
+streaming model instead writes to `./data/neutone-amt-streaming/guitarset`, so
+the two variants never share a cache directory.
 
 Keep any accompanying `amt.onnx.data` file beside `amt.onnx`. Both streaming
 exports (audio plus state cache) and offline exports are supported. Select them
@@ -138,13 +168,10 @@ separately with the streaming export or CPU.
 To train using these Neutone caches:
 
 ```bash
-polyddsp-train experiment=guitarset \
-    experiment.dataset.root=/media/ssd2/data/guitarset/audio_mono-pickup_mix \
-    experiment.dataset.pitch_cache_root=./data/neutone-amt/guitarset \
-    experiment.dataset.pitch_cache_source=neutone-amt-nonstreaming
+polyddsp-train experiment=guitarset run.pitch_cache_source=neutone-amt-nonstreaming
 ```
 
-Pass the same dataset overrides when evaluating. `pitch_cache_source` defaults
+Pass the same source override when evaluating. `run.pitch_cache_source` defaults
 to `basic-pitch`; selecting `neutone-amt-nonstreaming` uses the
 `neutone_nonstreaming_v6_sr16000_hop64` suffix for this configuration. All three
 options use the existing `cached_basic_pitch` model input, which reads the shared
@@ -152,7 +179,7 @@ pitch/velocity tensor format. New caches also record their source internally;
 training rejects a cache whose recorded source disagrees with
 `pitch_cache_source`, while legacy caches without metadata remain readable.
 
-Ground-truth caches use `pitch_cache_source=ground-truth` and the suffix
+Ground-truth caches use `run.pitch_cache_source=ground-truth` and the suffix
 `ground_truth_v{V}_sr{sample_rate}_hop{hop}`. Generate them with:
 
 ```bash
@@ -197,11 +224,12 @@ compute.
   `model=neutone-amt-nonstreaming`, or `model=ground-truth`.
   Set `sample_rate` and `hop` to match the training model's
   `model.sr` and `model.frame_hop`, and match the voice count too. Training's
-  `experiment.dataset.pitch_cache_source` selects which generated cache to
-  read (one of those same four names); its `pitch_cache_root` points to the
-  preprocessing output directory when using separate cache storage.
-- The cache is a per-file `.bp_v{V}_sr16000_hop64.f0.pt` sidecar, and is skipped
-  if newer than its audio.
+  `run.pitch_cache_source` selects which generated cache to read (one of those
+  same four names). Training and preprocessing both resolve
+  `run.cache_root/<source>/<experiment>` automatically.
+- Each cache is a per-file `.f0.pt` tensor file whose suffix identifies its
+  source, voice count, sample rate, and hop. It is skipped if newer than its
+  audio (and MIDI, for ground truth).
 - `infer` transcribes in-process with `--pitch-encoder basic-pitch` (the default)
   or either Neutone AMT variant, so it needs no cache and takes any audio file.
 - Config is Hydra (`configs/config.yaml`, `configs/preprocess.yaml`, and
@@ -225,6 +253,11 @@ Open `http://localhost:6006`. Each run writes events under
 
 - Scalars retain the existing tags: `loss`, `val/<metric>`, and
   `val/final/<metric>`, at the same training/evaluation intervals.
+- `train/z_scale` and `train/noise_scale` are overlaid under
+  Custom Scalars → Training → Warmup scales.
+- Harmonic and noise RMS are stored in the main run as
+  `val/component_rms/{harmonic,noise}` and overlaid under
+  Custom Scalars → Validation → Component RMS.
 - Audio retains all six previews: reference, prediction, harmonic, noise,
   peak-normalized dry mix, and wet-only reverb. Periodic and final-model previews
   are labelled `val/last.pt/audio_*`; the best validation-MSS checkpoint is

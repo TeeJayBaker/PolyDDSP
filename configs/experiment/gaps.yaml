@@ -5,13 +5,13 @@ experiment:
     root: ${run.data_root}/gaps
     file_glob: "**/*wc.wav"
     midi_glob: "**/*wc.mid"
-    # null keeps the legacy sidecar layout; set this to use a separate cache tree.
-    pitch_cache_root: null
-    pitch_cache_source: basic-pitch  # basic-pitch | neutone-amt-streaming | neutone-amt-nonstreaming | ground-truth
+    pitch_cache_root: ${run.cache_root}/${run.pitch_cache_source}/gaps
+    pitch_cache_source: ${run.pitch_cache_source}
   model:
     n_voices: 6
     use_z: true
     use_reverb: false
+    pitch_source: cached_basic_pitch
   metrics:
     primary: [loudness, multipitch, mss, mfcc, clap, fad]
     multipitch: true

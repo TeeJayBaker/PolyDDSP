@@ -105,25 +105,21 @@ class RawAudioDataset(Dataset):
         if pitch_cache_kind is not None:
             if n_voices is None:
                 raise ValueError(f"pitch_cache_kind={pitch_cache_kind!r} requires n_voices")
-            missing = [
-                p for p in self.active
-                if not cache_path_for(
+            expected_caches = [
+                (
                     p,
-                    pitch_cache_suffix,
-                    root=self.root,
-                    output_dir=self.pitch_cache_root,
-                ).exists()
+                    cache_path_for(
+                        p,
+                        pitch_cache_suffix,
+                        root=self.root,
+                        output_dir=self.pitch_cache_root,
+                    ),
+                )
+                for p in self.active
             ]
+            missing = [(audio, cache) for audio, cache in expected_caches if not cache.exists()]
             if missing:
-                if pitch_cache_kind == "ground_truth":
-                    raise FileNotFoundError(
-                        f"ground-truth MIDI cache missing for {len(missing)}/{len(self.active)} "
-                        f"files (suffix={pitch_cache_suffix}); run `polyddsp-preprocess "
-                        f"data_root={self.root} file_glob='{file_glob}' "
-                        f"model=ground-truth n_voices={n_voices} "
-                        f"sample_rate={sample_rate} hop={f0_hop}` "
-                        f"before training. First missing: {missing[0]}"
-                    )
+                first_audio, first_cache = missing[0]
                 preprocess_cmd = (
                     f"polyddsp-preprocess data_root={self.root} "
                     f"file_glob='{file_glob}' "
@@ -131,7 +127,10 @@ class RawAudioDataset(Dataset):
                     f"n_voices={n_voices} "
                     f"sample_rate={sample_rate} hop={f0_hop}"
                 )
-                if pitch_cache_kind == "neutone":
+                if pitch_cache_kind in (
+                    "neutone-amt-streaming",
+                    "neutone-amt-nonstreaming",
+                ):
                     preprocess_cmd += " model_path=/path/to/amt.onnx"
                 if self.pitch_cache_root is not None:
                     preprocess_cmd += (
@@ -140,7 +139,7 @@ class RawAudioDataset(Dataset):
                 raise FileNotFoundError(
                     f"pitch cache missing for {len(missing)}/{len(self.active)} files "
                     f"(suffix={pitch_cache_suffix}); run `{preprocess_cmd}`. "
-                    f"First missing: {missing[0]}"
+                    f"First missing cache: {first_cache} (for audio: {first_audio})"
                 )
 
     def __len__(self) -> int:

@@ -1,7 +1,12 @@
 """Pitch-cache preprocessing backends and stable public API."""
 from polyddsp.preprocess.basic_pitch import cache_suffix as bp_cache_suffix
 from polyddsp.preprocess.basic_pitch import precompute_one as precompute_one_bp
-from polyddsp.preprocess.cache import cache_path_for, resolve_pitch_cache
+from polyddsp.preprocess.cache import (
+    PITCH_CACHE_SOURCES,
+    cache_path_for,
+    pitch_cache_root_for,
+    resolve_pitch_cache,
+)
 from polyddsp.preprocess.cli import (
     PreprocessOptions,
     main,
@@ -29,6 +34,7 @@ __all__ = [
     "MIDI_VELOCITY_64",
     "NEUTONE_NATIVE_SR",
     "PreprocessOptions",
+    "PITCH_CACHE_SOURCES",
     "audio_within_duration_limit",
     "bp_cache_suffix",
     "cache_path_for",
@@ -44,6 +50,7 @@ __all__ = [
     "precompute_one_ground_truth",
     "precompute_one_neutone_amt",
     "preprocess_options_from_cfg",
+    "pitch_cache_root_for",
     "resolve_pitch_cache",
     "run_preprocess",
     "validate_neutone_amt_source",

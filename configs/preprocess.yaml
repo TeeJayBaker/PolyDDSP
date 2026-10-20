@@ -6,7 +6,8 @@ defaults:
 
 run:
   data_root: ${oc.env:POLYDDSP_DATA_DIR,/data/polyddsp}
-  cache_root: ${oc.env:POLYDDSP_CACHE_DIR,./data/ground-truth}
+  # Base directory for all pitch caches. Each source owns one child directory.
+  cache_root: ${oc.env:POLYDDSP_CACHE_DIR,./data}
   devices:
     guitarset: auto
     gaps: auto
@@ -18,7 +19,8 @@ midi_glob: ${experiment.dataset.midi_glob}
 n_voices: ${experiment.model.n_voices}
 model: basic-pitch     # basic-pitch | neutone-amt-streaming | neutone-amt-nonstreaming | ground-truth
 model_path: null       # Neutone Lightning checkpoint or ONNX export
-output_dir: null       # null writes beside source audio; otherwise mirrors dataset paths here
+output_dir: ${run.cache_root}/${model}/${experiment.name}
+# Override output_dir=null only when intentionally writing legacy sidecars beside audio.
 apply_sustain: true    # ground truth: extend notes through sustain-pedal intervals
 pitch_bend_range: 2.0 # ground truth: semitones represented by full-scale MIDI pitch bend
 sample_rate: 16000
