@@ -9,7 +9,6 @@ from __future__ import annotations
 import math
 
 import torch
-import torch.nn.functional as F
 
 F0_RANGE = 127.0
 DB_RANGE = 80.0
@@ -114,15 +113,12 @@ def upsample_with_windows(
     window_length = 2 * hop_size
     window = torch.hann_window(window_length, device=inputs.device, dtype=inputs.dtype)
 
-    B, T, C = inputs.shape
-    # (B, T, C) -> (B, C, T) -> (B*C, 1, T) — treat each channel independently.
-    x = inputs.permute(0, 2, 1).reshape(B * C, 1, T)
-    # Build a kernel (1, 1, W) from the window so conv_transpose1d performs
-    # constant-overlap-add: y[t] = sum_k x[k] * w[t - k*hop].
-    kernel = window.view(1, 1, window_length)
-    out = F.conv_transpose1d(x, kernel, stride=hop_size, padding=0)
-    # `out`: (B*C, 1, (T-1)*hop + W). Drop the first/last hop_size samples to
-    # mirror DDSP's "trim the rise and fall of the first/last window".
-    out = out[..., hop_size:-hop_size]
-    out = out.reshape(B, C, -1).permute(0, 2, 1).contiguous()
-    return out
+    # After trimming the first/last half-window, every interval contains just
+    # the falling half of frame k and the rising half of frame k+1. Evaluate
+    # those two terms directly: conv_transpose1d is disproportionately costly
+    # for one-frame streaming calls with hundreds of harmonic channels.
+    B, _, C = inputs.shape
+    falling = window[hop_size:].view(1, 1, hop_size, 1)
+    rising = window[:hop_size].view(1, 1, hop_size, 1)
+    out = inputs[:, :-1].unsqueeze(2) * falling + inputs[:, 1:].unsqueeze(2) * rising
+    return out.reshape(B, n_timesteps, C)

@@ -105,3 +105,22 @@ def test_upsample_with_windows_multi_channel():
     x = torch.randn(2, 5, 3)
     y = upsample_with_windows(x, 100, add_endpoint=True)
     assert y.shape == (2, 100, 3)
+
+
+@pytest.mark.parametrize("add_endpoint", [False, True])
+@pytest.mark.parametrize("frames", [2, 7])
+def test_window_upsampling_matches_original_convolution_and_gradient(add_endpoint, frames):
+    """The fast adjacent-frame blend must retain DDSP's original Hann OLA."""
+    x = torch.randn(2, frames, 3, requires_grad=True)
+    target = (frames if add_endpoint else frames - 1) * 64
+    actual = upsample_with_windows(x, target, add_endpoint=add_endpoint)
+    controls = torch.cat([x, x[:, -1:]], dim=1) if add_endpoint else x
+    kernel = torch.hann_window(128).reshape(1, 1, 128)
+    reference = torch.nn.functional.conv_transpose1d(
+        controls.permute(0, 2, 1).reshape(6, 1, -1), kernel, stride=64,
+    )[..., 64:-64].reshape(2, 3, target).transpose(1, 2)
+    torch.testing.assert_close(actual, reference, rtol=1e-6, atol=1e-6)
+    weights = torch.randn_like(actual)
+    actual_grad, = torch.autograd.grad((actual * weights).sum(), x, retain_graph=True)
+    reference_grad, = torch.autograd.grad((reference * weights).sum(), x)
+    torch.testing.assert_close(actual_grad, reference_grad, rtol=1e-5, atol=1e-5)

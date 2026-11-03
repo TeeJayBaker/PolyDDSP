@@ -114,6 +114,7 @@ class VoiceDecoder(nn.Module):
     ) -> None:
         super().__init__()
         self.use_z = use_z
+        self.z_dim = z_dim
         self.use_velocity = use_velocity
         self.n_harmonics = n_harmonics
         self.n_bands = n_bands
@@ -150,7 +151,29 @@ class VoiceDecoder(nn.Module):
         z: torch.Tensor | None,
         z_scale: float | None = 1.0,
     ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+        harm, amp, noise, _ = self.forward_with_state(pitch, velocity, loudness, z, z_scale)
+        return harm, amp, noise
+
+    def forward_with_state(
+        self,
+        pitch: torch.Tensor,
+        velocity: torch.Tensor,
+        loudness: torch.Tensor,
+        z: torch.Tensor | None,
+        z_scale: float = 1.0,
+        hidden: torch.Tensor | None = None,
+        n_core: int | None = None,
+    ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
+        """Decode new scaled control frames and return the GRU's next state.
+
+        n_core optionally excludes lookahead frames from the returned state,
+        matching the offline renderer's existing block protocol. All supplied
+        frames receive predictions; only the first n_core advance saved state.
+        """
         B, V, T = pitch.shape
+        n_core = T if n_core is None else n_core
+        if not 1 <= n_core <= T:
+            raise ValueError("n_core must select at least one supplied frame")
         vel_in = velocity if self.use_velocity else None
         feat_in = _stack_voice_features(pitch, vel_in, loudness, z if self.use_z else None)
 
@@ -166,11 +189,14 @@ class VoiceDecoder(nn.Module):
             feats.append(self.z_mlp(feat_in[..., idx:]) * z_scale)
         cat = torch.cat(feats, dim=-1)
 
-        gru_out, _ = self.gru(cat)
+        gru_out, next_hidden = self.gru(cat[:, :n_core], hidden)
+        if T > n_core:
+            ahead, _ = self.gru(cat[:, n_core:], next_hidden)
+            gru_out = torch.cat([gru_out, ahead], dim=1)
         post = self.post_mlp(torch.cat([cat, gru_out], dim=-1))
         head_out = self.head(post)  # (B*V, T, 1+H+n_bands)
 
         amp_v = _modified_sigmoid(head_out[..., 0]).reshape(B, V, T)
         harm_dist = head_out[..., 1:1 + self.n_harmonics].reshape(B, V, T, self.n_harmonics)
         noise_mags = head_out[..., 1 + self.n_harmonics:].reshape(B, V, T, self.n_bands)
-        return harm_dist, amp_v, noise_mags
+        return harm_dist, amp_v, noise_mags, next_hidden

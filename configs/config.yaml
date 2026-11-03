@@ -42,7 +42,7 @@ model:
   noise_bands: 65
   noise_window: 0       # 0 → window_size = ir_size = 2*(n_bands-1) (DDSP default)
   reverb_len: 48000     # DDSP solo_instrument.gin
-  loudness_n_fft: 512   # DDSP compute_loudness default
+  loudness_n_fft: 512   # trailing Hann window: 32 ms at 16 kHz
   gru_hidden: 512
   mlp_hidden: 512
   mlp_layers: 3

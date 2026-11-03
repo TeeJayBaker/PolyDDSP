@@ -16,12 +16,160 @@ Era (CMMR 2023), Springer LNCS 13770 — https://zenodo.org/records/10113134
   voice count is a runtime choice.
 - Each voice takes its loudness from one extracted loudness envelope plus its
   own framed velocity from Basic Pitch. Timbre encoding is global.
+- Loudness uses a trailing 512-sample Hann window (32 ms at 16 kHz), A-weighted
+  power, and the fixed `(db / 80) + 1` scale. Like timbre features, each value
+  ends at its 4 ms control-block boundary and uses zero-padding only for missing
+  startup history. It requires no future audio. This changes conditioning from
+  the old centered extractor and should be reflected in training/fine-tuning.
+  The loudness metric also reuses this extractor, so historical scores used a
+  different frame alignment.
+- The timbre encoder uses 30 MFCC coefficients from 128 mel bands and per-frame
+  LayerNorm. At 16 kHz its trailing 2048-sample Hann window spans 128 ms, with
+  a 4 ms hop. Each frame ends at the last sample of its control block, uses
+  zero-padding for missing startup history, and needs no future audio beyond
+  that block. A partial final block is omitted. Frame timing stays fixed when
+  audio is appended. The middle weighting emphasizes older audio; this is not
+  a fixed 64 ms delay of the resulting embedding, nor a total latency guarantee.
+  Full audio-to-audio resynthesis still needs an incremental input adapter. The changed
+  normalization and alignment require fine-tuning or retraining z-enabled
+  models; older analysis-buffer shapes may also need checkpoint migration.
 - Audio can be generated at any sample rate by changing the synthesis
   resolution. The experiments below ran at 16 kHz to match the original DDSP.
 
 Key modules: `polyddsp/model/polyddsp.py` (top level), `decoder.py`,
 `additive.py`, `noise.py`, `reverb.py`, `z.py`, `loudness.py`,
 `note_extraction.py`, `voice_allocation.py`.
+
+The timbre encoder supports incremental inference with explicit per-stream state:
+
+```python
+encoder.eval()
+state = None
+for audio_chunk in incoming_audio:  # (batch, samples), at the encoder's sample rate
+    z_chunk, state = encoder.stream(audio_chunk, state)
+```
+
+Each call returns only newly completed control frames. State retains a fixed-size
+audio history, any partial hop, and the GRU's hidden state; previous feature frames
+are not fed through the GRU again. Calls may have arbitrary sample counts, including
+zero, while keeping the batch size, device, and dtype fixed. Passing `None` starts
+a fresh stream. Discarding state at the end drops the partial final hop, matching
+`encoder(audio)` on the concatenated input. `stream` disables autograd; use the
+regular forward method for training. This method encodes timbre only; the
+controls-to-audio streaming core below connects the synthesis components.
+
+Loudness has the same streaming convention and needs only audio-buffer state:
+
+```python
+loudness_state = z_state = None
+for audio_chunk in incoming_audio:
+    loudness_chunk, loudness_state = model.loudness.stream(audio_chunk, loudness_state)
+    z_chunk, z_state = model.z_encoder.stream(audio_chunk, z_state)  # use_z=True
+```
+
+With the same audio chunks and frame hop, both emit the same number of frames on
+each call, even with irregular chunk sizes. Their windows have different history
+lengths but end on identical sample boundaries. Setting `normalise=False` on the
+loudness extractor returns raw dB; its streaming method disables autograd, while
+the regular forward method remains differentiable.
+
+Filtered noise and reverb also have explicit-state inference interfaces:
+
+```python
+noise_chunk, noise_state = model.noise_synth.stream(new_noise_mags, noise_state)
+wet_chunk, reverb_state = model.reverb.stream(new_dry_audio, reverb_state)
+```
+
+Initialize each state to `None`; each call returns new audio and the updated state.
+Noise accepts `(batch_times_voices, frames, noise_bands)` controls and retains FIR
+overlap plus its own random-generator state. An optional `seed` on the first call
+gives repeatable excitation independent of chunk boundaries. Supplying `noise=`
+to either `forward` or `stream` bypasses random draws for exact comparisons.
+The existing delay compensation is preserved: with 65 bands the stream withholds
+62 samples (3.875 ms at 16 kHz) initially. Call `noise_synth.flush(noise_state)`
+at EOF to emit the outstanding samples and match the offline output length.
+`include_tail=True` also preserves the remaining physical FIR decay.
+
+Reverb uses uniform partitioned FFT convolution, with a default 64-sample block
+(4 ms at 16 kHz). It caches the partitioned IR and retains input-spectrum history,
+overlap, and any incomplete input block. Its state size depends on the fixed IR
+length, not performance duration. IR weights must remain fixed while the state is
+in use; reset state after changing weights. `reverb.flush(reverb_state)` finishes
+the pending block to match the offline input-length output. Use
+`reverb.flush(reverb_state, include_tail=True)` to retain the complete reverb decay.
+Discard state after flushing. Both streaming methods disable autograd; clip-based
+forward methods remain differentiable and use the same synthesis weights.
+
+The global streaming pipeline must account for unequal chunk lengths: noise's
+startup compensation and reverb's partial-block buffering can return fewer samples
+than were supplied. At EOF, flush upstream noise before flushing downstream reverb.
+`StreamingSynthesizer` coordinates these buffers and output lengths for synthesis.
+
+### Source-independent streaming synthesis
+
+Pitch/velocity generation is separate from the synthesis core. Training can use
+offline caches, an instrument adapter can generate controls from MIDI, and a future
+live AMT adapter can supply the same frame format. No AMT inference is performed
+by the streaming synthesizer:
+
+```python
+from polyddsp.model.streaming import StreamingSynthesizer
+
+synth = StreamingSynthesizer.from_model(model).eval()
+state = None
+for pitch, velocity, loudness, z in control_chunks:
+    audio, state = synth.process(pitch, velocity, loudness, z, state)
+    # Consume ready audio in order; startup may produce an empty chunk.
+tail = synth.flush(state, include_tail=True)
+```
+
+| Control | Shape | Meaning |
+|---|---|---|
+| pitch | `(batch, voices, frames)` | Hz; zero for an inactive slot |
+| velocity | `(batch, voices, frames)` | Normalized note strength |
+| loudness | `(batch, frames)` | Extractor scale `(db / 80) + 1` |
+| z | `(batch, frames, z_dim)` | Explicit timbre conditioning for z-enabled models |
+
+All controls share the same frame grid, device, and dtype. Voice slots persist
+between calls; note tracking/allocation belongs to the input adapter. MIDI playback
+must explicitly provide a loudness policy and, for z-enabled models, reference or
+user-selected timbre conditioning. These are not inferred from pitch/velocity alone.
+
+The core owns only the voice decoder and DSP modules, reusing the trained weights
+and saved inference scales. Its state retains the GRU memory, oscillator phase,
+at most two decoded context frames, small harmonic/noise alignment queues, and
+noise/reverb state. Harmonic interpolation needs one future control frame (4 ms
+at 16 kHz/hop 64); noise compensation and reverb block buffering are coordinated
+internally. This is algorithmic buffering, not a measured device-to-device latency.
+`None` resets a stream. Empty control blocks are accepted; batch size, voice count,
+weights, scales, and timing settings must remain fixed until reset. `flush` ends
+the stream and completes the input-length output; `include_tail=True` additionally
+preserves the reverb decay. Discard state afterwards.
+
+For differentiable clip training or evaluation with already prepared controls,
+`model.synthesize(pitch, velocity, loudness, z)` returns `(audio, parts)` without
+calling a pitch or audio encoder. The regular training forward computes loudness
+and z from target audio and uses this same synthesis path with cached pitch and
+velocity. `StreamingSynthesizer.process` is for inference and disables autograd.
+The existing file-oriented `render` remains available. Live AMT, MIDI/audio-device
+I/O, trained sound-quality evaluation, and the 32 ms latency target are separate
+integration and validation work.
+
+Benchmark a trained checkpoint's synthesis core with externally supplied synthetic
+controls, without running a pitch model:
+
+```bash
+uv run python -m polyddsp.benchmark_stream --ckpt outputs/<run>/best.pt \
+    --device cpu --threads 1 --block-frames 1
+```
+
+Repeat with `--block-frames 4` for 16 ms blocks at the default hop, or select
+`--device cuda:0`. The report includes median, p99, maximum call times, and misses
+of the block's processing deadline. CUDA measurements synchronize device execution.
+This measures synthesis throughput, not sound quality or total audio-device latency.
+Choose the training architecture using these measurements and subsequent trained
+quality evaluation; a functionally streaming model may still be too slow for its
+selected block size on a particular device.
 
 ## Install
 
@@ -312,9 +460,12 @@ at V=6 and 2x at V=10.
 
 - Basic Pitch note timing drifts on long files, by about 0.3 s per minute of
   audio. See `tests/test_bp_timing_drift.py`.
-- The model is not streamable, purely because there is no streamable polyphonic
-  pitch detector to put in front of it. Everything downstream generalises to
-  streaming.
+- The file-oriented renderer remains offline. `StreamingSynthesizer` instead
+  accepts externally prepared controls and carries decoder, oscillator, noise,
+  and reverb state. Live pitch transcription/voice allocation and MIDI/audio-device
+  adapters are separate work. Real-time suitability depends on the model size,
+  block size, and target device and must be benchmarked; offline throughput does
+  not establish the 32 ms total latency target.
 
 ## Tests
 

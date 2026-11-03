@@ -1,4 +1,4 @@
-"""MFCC L1 metric (n_mfcc=30, matches Z-encoder config)."""
+"""MFCC L1 metric with 30 coefficients and a fixed offline analysis window."""
 from __future__ import annotations
 
 import numpy as np

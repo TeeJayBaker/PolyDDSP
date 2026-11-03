@@ -285,10 +285,9 @@ def test_render_uses_checkpoint_scales_and_allows_overrides() -> None:
 def test_decode_block_matches_voice_decoder() -> None:
     """`PolyDDSP._decode_block` must be `VoiceDecoder.forward` plus GRU threading.
 
-    `_decode_block` re-runs the decoder's submodules by hand (to get at the GRU's
-    final hidden state, which `VoiceDecoder.forward` discards and which
-    `decoder.py` is off-limits to change). Run over a whole clip with `h_0=None`
-    and no look-ahead frame it must be the same computation.
+    `_decode_block` delegates to the shared stateful decoder implementation.
+    Run over a whole clip with `h_0=None` and no look-ahead frame it must be
+    the same computation as an independent forward call.
     """
     for use_z in (False, True):
         model = _tiny_model(use_z=use_z, n_voices=V)

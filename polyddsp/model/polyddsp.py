@@ -130,6 +130,7 @@ class PolyDDSP(nn.Module):
         z: torch.Tensor | None,
         z_scale: float | None = 1.0,
         noise_scale: float = 1.0,
+        noise: torch.Tensor | None = None,
     ) -> tuple[torch.Tensor, dict]:
         """Decoder and synthesisers for a block of frames, before reverb.
 
@@ -169,7 +170,10 @@ class PolyDDSP(nn.Module):
         # and reduces to standard DDSP noise for V=1.
         if self.use_noise:
             B, V, T_frames, n_bands = noise_mags.shape
-            noise_v = self.noise_synth(noise_mags.reshape(B * V, T_frames, n_bands))
+            excitation = None if noise is None else noise.reshape(B * V, T_frames * self.frame_hop)
+            noise_v = self.noise_synth(
+                noise_mags.reshape(B * V, T_frames, n_bands), noise=excitation,
+            )
             T_samples = noise_v.shape[-1]
             audio_noise = noise_v.reshape(B, V, T_samples).sum(dim=1)
             audio_noise = audio_noise[..., : audio_harm.shape[-1]]
@@ -187,6 +191,44 @@ class PolyDDSP(nn.Module):
         )
         return mix, parts
 
+    def synthesize(
+        self,
+        pitch: torch.Tensor,
+        velocity: torch.Tensor,
+        loudness: torch.Tensor,
+        z: torch.Tensor | None = None,
+        *,
+        z_scale: float | None = None,
+        noise_scale: float | None = None,
+        noise: torch.Tensor | None = None,
+    ) -> tuple[torch.Tensor, dict]:
+        """Differentiable controls-to-audio path, without pitch/audio analysis.
+
+        pitch/velocity: (B, V, frames), pitch in Hz and velocity in [0, 1].
+        loudness: (B, frames), using the extractor's static normalized scale.
+        z: (B, frames, z_dim), required for z-enabled models. Optional noise is
+        explicit excitation shaped (B, V, frames * frame_hop), for comparisons.
+        Cached controls, MIDI adapters, and AMT adapters share this boundary.
+        """
+        if pitch.ndim != 3 or velocity.shape != pitch.shape:
+            raise ValueError("pitch and velocity must have shape (batch, voices, frames)")
+        B, V, count = pitch.shape
+        if loudness.shape != (B, count):
+            raise ValueError("loudness must match the pitch frame grid")
+        if self.use_z and (z is None or z.shape != (B, count, self.decoder.z_dim)):
+            raise ValueError("z-enabled models require z with shape (batch, frames, z_dim)")
+        if noise is not None and (
+            not self.use_noise or noise.shape != (B, V, count * self.frame_hop)
+        ):
+            raise ValueError("explicit noise requires an enabled noise path and matching samples")
+        mix, parts = self._synthesise(
+            pitch, velocity, loudness, z,
+            self.inference_z_scale if z_scale is None else z_scale,
+            self.inference_noise_scale if noise_scale is None else noise_scale,
+            noise,
+        )
+        return (self.reverb(mix) if self.use_reverb else mix), parts
+
     def _decode_block(
         self,
         pitch_scaled: torch.Tensor,
@@ -199,17 +241,9 @@ class PolyDDSP(nn.Module):
     ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
         """`VoiceDecoder.forward` with the GRU's hidden state threaded through.
 
-        `VoiceDecoder.forward` drops the GRU's final hidden state (`gru_out, _ =
-        self.gru(cat)`), so calling it once per block would silently restart the
-        recurrence at every block boundary — the decoder outputs would then
-        differ from a whole-file pass no matter how exact the oscillator is.
-        Rather than change `decoder.py` (whose `forward` signature is what
-        training and the parity tests are written against), this method runs the
-        decoder's own submodules in exactly the order `VoiceDecoder.forward` does
-        and threads `h_0` / `h_n` through `self.decoder.gru` itself. Everything
-        except the GRU is frame-wise, so nothing else needs state.
-        `tests/test_infer.py::test_decode_block_matches_voice_decoder` pins the
-        two paths together.
+        The regular decoder forward starts independent clips. This adapter uses
+        its shared forward_with_state implementation to retain the renderer's
+        recurrent state, without duplicating the decoder's learned computation.
 
         `n_core` frames are the block proper; any frames beyond that are the
         one-frame look-ahead `AdditiveSynth`'s amplitude upsampler needs. The
@@ -220,38 +254,9 @@ class PolyDDSP(nn.Module):
 
         Returns `(harm_dist, amp_v, noise_mags, h_n)` over *all* supplied frames.
         """
-        from polyddsp.model.decoder import _modified_sigmoid, _stack_voice_features
-
-        dec = self.decoder
-        B, V, T = pitch_scaled.shape
-        vel_in = velocity if dec.use_velocity else None
-        feat_in = _stack_voice_features(pitch_scaled, vel_in, loudness, z if dec.use_z else None)
-
-        idx = 0
-        feats = [dec.f0_mlp(feat_in[..., idx:idx + 1])]
-        idx += 1
-        if dec.use_velocity:
-            feats.append(dec.vel_mlp(feat_in[..., idx:idx + 1]))
-            idx += 1
-        feats.append(dec.loud_mlp(feat_in[..., idx:idx + 1]))
-        idx += 1
-        if dec.use_z:
-            feats.append(dec.z_mlp(feat_in[..., idx:]) * z_scale)
-        cat = torch.cat(feats, dim=-1)
-
-        gru_core, h_n = dec.gru(cat[:, :n_core], h_0)
-        if T > n_core:
-            gru_ahead, _ = dec.gru(cat[:, n_core:], h_n)
-            gru_out = torch.cat([gru_core, gru_ahead], dim=1)
-        else:
-            gru_out = gru_core
-        post = dec.post_mlp(torch.cat([cat, gru_out], dim=-1))
-        head_out = dec.head(post)  # (B*V, T, 1+H+n_bands)
-
-        amp_v = _modified_sigmoid(head_out[..., 0]).reshape(B, V, T)
-        harm_dist = head_out[..., 1:1 + dec.n_harmonics].reshape(B, V, T, dec.n_harmonics)
-        noise_mags = head_out[..., 1 + dec.n_harmonics:].reshape(B, V, T, dec.n_bands)
-        return harm_dist, amp_v, noise_mags, h_n
+        return self.decoder.forward_with_state(
+            pitch_scaled, velocity, loudness, z, z_scale, h_0, n_core,
+        )
 
     def _conditioning(
         self,
@@ -288,11 +293,9 @@ class PolyDDSP(nn.Module):
             noise_scale = self.inference_noise_scale
         pitch, velocity, loudness, z, bp_post = self._conditioning(audio, pitch, velocity)
 
-        mix, parts = self._synthesise(
-            pitch, velocity, loudness, z, z_scale, noise_scale,
+        out, parts = self.synthesize(
+            pitch, velocity, loudness, z, z_scale=z_scale, noise_scale=noise_scale,
         )
-
-        out = self.reverb(mix) if self.use_reverb else mix
         out = out[..., : audio.shape[-1]]
 
         aux = dict(
