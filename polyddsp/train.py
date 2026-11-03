@@ -201,6 +201,7 @@ class TrainState:
         torch.save(
             {
                 "model": model.state_dict(),
+                "streaming_version": model.STREAMING_VERSION,
                 "opt": opt.state_dict(),
                 "sched": sched.state_dict(),
                 "step": self.step,

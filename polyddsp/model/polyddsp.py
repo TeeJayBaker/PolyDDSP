@@ -30,6 +30,10 @@ class PolyDDSP(nn.Module):
     design with one independent decoder per output head exhibited.
     """
 
+    # Version 1 uses trailing loudness/MFCC windows and per-frame z LayerNorm.
+    # Weight shapes alone cannot distinguish these from earlier feature semantics.
+    STREAMING_VERSION = 1
+
     def __init__(
         self,
         sr: int = 16_000,

@@ -94,7 +94,9 @@ def _normalise_argv(argv: list[str]) -> list[str]:
     return out
 
 
-def load_run(ckpt_path: str | Path, device: str = "cpu") -> tuple[PolyDDSP, DictConfig]:
+def load_run(
+    ckpt_path: str | Path, device: str = "cpu", *, require_streaming: bool = False,
+) -> tuple[PolyDDSP, DictConfig]:
     """Rebuild the model a checkpoint was trained as, from the run's own config.
 
     `polyddsp.train` writes the resolved config to `config.yaml` in the run
@@ -102,6 +104,8 @@ def load_run(ckpt_path: str | Path, device: str = "cpu") -> tuple[PolyDDSP, Dict
     from the checkpoint's own parent directory, never composed from `configs/`.
     Handles both `{"model": state_dict}` (what `train.py` saves) and a bare
     state dict. Returns an `eval()`-mode model already on `device`.
+    require_streaming rejects unmarked/unsupported checkpoints before constructing
+    the model: legacy weight shapes do not identify causal feature processing.
     """
     ckpt_path = Path(ckpt_path)
     if not ckpt_path.exists():
@@ -116,11 +120,19 @@ def load_run(ckpt_path: str | Path, device: str = "cpu") -> tuple[PolyDDSP, Dict
             f"into {ckpt_path.parent} and retry."
         )
 
+    state = torch.load(ckpt_path, map_location="cpu", weights_only=True)
+    if require_streaming:
+        version = state.get("streaming_version") if isinstance(state, dict) else None
+        if type(version) is not int or version != PolyDDSP.STREAMING_VERSION:
+            raise ValueError(
+                f"Checkpoint is not a verified streaming model (streaming_version={version!r}; "
+                f"expected {PolyDDSP.STREAMING_VERSION}). Use a checkpoint saved by the current "
+                "streaming training code. Older unmarked checkpoints cannot be verified from weights alone."
+            )
     # Deliberately unresolved: `run.name` may hold `${now:...}`, a Hydra-only resolver.
     cfg = OmegaConf.load(cfg_path)
     model = PolyDDSP.from_cfg(cfg)
 
-    state = torch.load(ckpt_path, map_location="cpu", weights_only=True)
     z_scale, noise_scale = _checkpoint_render_scales(state, cfg)
     model_state = state["model"] if isinstance(state, dict) and "model" in state else state
     model.load_state_dict(model_state)

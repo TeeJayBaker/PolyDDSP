@@ -62,6 +62,7 @@ def test_checkpoint_stores_render_scales(tmp_path: Path) -> None:
 
     saved = torch.load(path, map_location="cpu", weights_only=True)
     assert saved["step"] == 8_500
+    assert saved["streaming_version"] == PolyDDSP.STREAMING_VERSION
     assert saved["render_scales"] == {"z_scale": 0.5, "noise_scale": 0.5}
 
 

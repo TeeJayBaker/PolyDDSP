@@ -31,10 +31,21 @@ dependencies = [
     "tqdm>=4.66",
 ]
 
+[project.optional-dependencies]
+midi = [
+    "pyfluidsynth>=1.3.4,<2",
+    "mido>=1.3.3,<2",
+    "python-rtmidi>=1.5.8,<2",
+    "sounddevice>=0.5,<1",
+]
+
 [project.scripts]
 polyddsp-preprocess = "polyddsp.preprocess:main"
 polyddsp-train = "polyddsp.train:main"
 polyddsp-infer = "polyddsp.infer:main"
+polyddsp-midi = "polyddsp.midi_instrument.live:main"
+polyddsp-midi-render = "polyddsp.midi_instrument.render_file:main"
+polyddsp-midi-live = "polyddsp.midi_instrument.live:main"
 
 [dependency-groups]
 dev = ["pytest>=8.0"]

@@ -151,9 +151,9 @@ For differentiable clip training or evaluation with already prepared controls,
 calling a pitch or audio encoder. The regular training forward computes loudness
 and z from target audio and uses this same synthesis path with cached pitch and
 velocity. `StreamingSynthesizer.process` is for inference and disables autograd.
-The existing file-oriented `render` remains available. Live AMT, MIDI/audio-device
-I/O, trained sound-quality evaluation, and the 32 ms latency target are separate
-integration and validation work.
+The existing file-oriented `render` remains available. The optional MIDI adapter
+below supplies reference features and device I/O. Live AMT, trained sound-quality
+evaluation, and the 32 ms latency target still need integration and validation.
 
 Benchmark a trained checkpoint's synthesis core with externally supplied synthetic
 controls, without running a pitch model:
@@ -179,6 +179,78 @@ export POLYDDSP_DATA_DIR=/path/to/data      # datasets, default /data/polyddsp
 export POLYDDSP_CACHE_DIR=/path/to/cache    # cache base, default ./data
 export POLYDDSP_OUT_DIR=/path/to/runs       # run outputs, default outputs/
 ```
+
+### MIDI instrument (optional)
+
+`polyddsp.midi_instrument` is a separate inference module. MIDI supplies pitch and
+velocity directly. A headless FluidSynth instance renders the same notes through
+a user-supplied guitar SoundFont to provide streaming loudness and, when enabled,
+`z`. Only PolyDDSP output is played or written; the reference never opens an audio
+output. The existing training and pitch-cache paths are unchanged.
+
+Install the native FluidSynth library, and PortAudio for live playback, using
+your platform's package manager. Then install the optional Python dependencies:
+
+```bash
+uv sync --extra midi
+```
+
+Use a checkpoint trained with the current causal feature processing, with its
+`config.yaml` beside it. Training now saves `streaming_version: 1` in each
+checkpoint; MIDI commands reject missing or unsupported versions before opening
+the sampler or devices. Earlier unmarked checkpoints cannot be reliably identified
+by their weight shapes and are rejected even if they load in offline inference.
+Supply your own `.sf2` file; no patch is bundled. Bank
+and preset numbers are zero-based. The default bank 0 / preset 24 selects nylon
+guitar in a General MIDI SoundFont; a dedicated guitar SoundFont may use preset 0.
+
+First render a MIDI file through the same incremental pipeline used for live input:
+
+```bash
+uv run --extra midi polyddsp-midi-render \
+    --ckpt outputs/<run>/best.pt --soundfont /path/to/guitar.sf2 --preset 24 \
+    --midi /path/to/song.mid --out /path/to/polyddsp.wav
+```
+
+This writes a mono float WAV at the model sample rate, including a default 0.5 s
+release interval and model reverb tail. Existing output files are not overwritten.
+`--release-seconds` and `--no-reverb-tail` control the ending.
+
+List connected devices, then start live playback:
+
+```bash
+uv run --extra midi polyddsp-midi outputs/<run>/best.pt --soundfont /path/to/guitar.sf2
+```
+
+The command connects to the first available MIDI input, skipping the system's
+MIDI Through loopback, and uses the default audio output. It prints the selected
+MIDI input; if no controller is connected it exits with an explanatory error.
+With multiple controllers, choose one using `--midi-port "Your MIDI input"`.
+Use `--list-midi-ports` or `--list-audio-devices` without a model or SoundFont to
+list devices, and `--audio-device 0` to choose an output. The existing
+`polyddsp-midi-live --ckpt ...` spelling remains available. Stop with Ctrl-C.
+
+Live input supports note on/off, sustain, pitch bend, modulation, volume, pan,
+expression, all-notes-off and all-sound-off. `--channel` optionally selects a
+zero-based source channel. Program/bank changes are ignored to keep the reference
+patch fixed, and `--pitch-bend-range` sets a fixed shared sensitivity (default two
+semitones). Each model voice has its own sampler channel. When all slots are
+occupied, the quietest voice is stolen, choosing the oldest on a tie. Reusing a
+slot cuts its sampler release tail. Note-off clears its model pitch control;
+the reference's remaining decay still contributes to loudness and `z`.
+
+`--reference-gain` sets a fixed sampler gain; `--output-gain` adjusts PolyDDSP
+output. No per-block normalization is applied. The worker retains feature, GRU,
+oscillator and effects state; the audio callback only copies from a bounded queue.
+Playback defaults to the device sample rate, using a simple streaming linear
+converter when upsampling from the model rate. It rejects downsampling; this
+prototype converter is not intended for final audio-quality evaluation.
+
+At defaults, four control frames are 16 ms of model time. `--device`, `--threads`,
+`--block-frames` and `--buffer-blocks` allow device testing. The live command reports
+worker timings, deadline misses, queue underruns and late MIDI events on exit.
+Buffering, feature response and audio-device latency all contribute to total
+latency; this adapter does not establish the 32 ms target. Stop with Ctrl-C.
 
 ## Data
 
@@ -462,8 +534,9 @@ at V=6 and 2x at V=10.
   audio. See `tests/test_bp_timing_drift.py`.
 - The file-oriented renderer remains offline. `StreamingSynthesizer` instead
   accepts externally prepared controls and carries decoder, oscillator, noise,
-  and reverb state. Live pitch transcription/voice allocation and MIDI/audio-device
-  adapters are separate work. Real-time suitability depends on the model size,
+  and reverb state. The optional MIDI instrument provides voice allocation,
+  reference features and device I/O; live pitch transcription remains separate.
+  Real-time suitability depends on the model size,
   block size, and target device and must be benchmarked; offline throughput does
   not establish the 32 ms total latency target.
 

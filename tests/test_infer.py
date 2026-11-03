@@ -351,6 +351,33 @@ def _write_run_dir(
     return run
 
 
+@pytest.mark.parametrize("version", [None, 0, 999, "1", True])
+def test_streaming_load_rejects_unmarked_or_unsupported_checkpoint(tmp_path, version):
+    from polyddsp.infer import load_run
+
+    checkpoint = {"model": _tiny_model().state_dict()}
+    if version is not None:
+        checkpoint["streaming_version"] = version
+    run = _write_run_dir(tmp_path, _tiny_model(), checkpoint=checkpoint)
+    with pytest.raises(ValueError, match="not a verified streaming model"):
+        load_run(run / "best.pt", require_streaming=True)
+    # Existing offline inference keeps its legacy loading policy.
+    if version is None:
+        load_run(run / "best.pt")
+
+
+def test_streaming_load_accepts_supported_checkpoint(tmp_path):
+    from polyddsp.infer import load_run
+
+    source = _tiny_model()
+    run = _write_run_dir(tmp_path, source, checkpoint={
+        "model": source.state_dict(), "streaming_version": PolyDDSP.STREAMING_VERSION,
+    })
+    loaded, _ = load_run(run / "best.pt", require_streaming=True)
+    for name, value in source.state_dict().items():
+        torch.testing.assert_close(loaded.state_dict()[name], value)
+
+
 def test_load_run_uses_explicit_checkpoint_scales(tmp_path: Path) -> None:
     from polyddsp.infer import load_run
 
